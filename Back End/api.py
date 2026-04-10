@@ -1,26 +1,24 @@
-from fastapi import FastAPI, HTTPException, UploadFile, File
+from fastapi import FastAPI, HTTPException
 from fastapi.middleware.cors import CORSMiddleware
 from pydantic import BaseModel, Field
 import pandas as pd
 import xgboost as xgb
-from fastapi.middleware.cors import CORSMiddleware
 
-# Find where you defined app = FastAPI() and add this below it:
+# 1. DEFINE 'app' FIRST
+app = FastAPI(title="Tanza House Sight API")
+
+# 2. ADD MIDDLEWARE SECOND
 app.add_middleware(
-    CORSMiddleware,
-    allow_origins=["*"], # This is the magic line that allows Vercel to talk to it
+    CORSMiddleware, 
+    allow_origins=["*"], # This allows Vercel to talk to your backend
     allow_credentials=True,
-    allow_methods=["*"],
+    allow_methods=["*"], 
     allow_headers=["*"],
 )
 
-app = FastAPI(title="Tanza House Sight API")
-
-app.add_middleware(
-    CORSMiddleware, allow_origins=["*"], allow_credentials=True,
-    allow_methods=["*"], allow_headers=["*"],
-)
-
+# =====================================================================
+# BASELINE DICTIONARIES
+# =====================================================================
 proximity_map = {
     'Amaya': 1.8, 'Bagtas': 6.9, 'Biga': 4.8, 'Biwas': 2.1, 'Bucal': 1.7, 
     'Bunga': 7.0, 'Calibuyo': 6.8, 'Capipisa': 9.0, 'Daang Amaya': 0.8,
@@ -133,7 +131,7 @@ def get_recommendations(request: RecommendRequest):
         results.append({
             "id": str(row['barangay'].lower().replace(" ", "-")),
             "name": str(row['barangay']), 
-            "exact_match": float(exact_match),                 
+            "exact_match": float(exact_match),                
             "match": int(round(exact_match)), 
             "model_value": int(model_value),         
             "price": f"₱{row['raw_price']:,.0f}",
@@ -180,7 +178,7 @@ def analyze_barangay(request: AnalyzeRequest):
         p_price = base_price * ((1 + 0.06) ** years_into_future)
         
         predictions_list.append({
-            "Timeline": "0" if offset == 0 else f"+{offset} Years",
+            "Timeline": "Current" if offset == 0 else f"+{offset} Years",
             "AQI": p_aqi, "Flood": p_flood, "Predicted Price": p_price
         })
 
