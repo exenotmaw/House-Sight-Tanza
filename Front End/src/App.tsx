@@ -3,6 +3,7 @@ import LandingPage from './pages/LandingPage/LandingPage';
 import Studio from './pages/PredictionStudio/Studio';
 import Analysis from './pages/AnalysisPage/Analysis';
 import { Analytics } from '@vercel/analytics/react';
+import { SpeedInsights } from "@vercel/speed-insights/next"
 
 function App() {
   return (
@@ -14,6 +15,7 @@ function App() {
         <Route path="/analysis" element={<Analysis />} />
       </Routes>
       <Analytics /> 
+      <SpeedInsights /> 
     </Router>
     
   );
