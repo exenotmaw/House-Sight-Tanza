@@ -3,7 +3,7 @@ import LandingPage from './pages/LandingPage/LandingPage';
 import Studio from './pages/PredictionStudio/Studio';
 import Analysis from './pages/AnalysisPage/Analysis';
 import { Analytics } from '@vercel/analytics/react';
-import { SpeedInsights } from "@vercel/speed-insights/next";
+import { SpeedInsights } from "@vercel/speed-insights/react";
 
 function App() {
   return (
