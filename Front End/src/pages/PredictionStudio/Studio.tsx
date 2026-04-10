@@ -37,7 +37,7 @@ const Studio: React.FC = () => {
     const fetchPredictions = async () => {
       setIsPredicting(true);
       try {
-        const response = await fetch('http://localhost:8000/recommend', {
+        const response = await fetch('https://house-sight-tanza.onrender.com/recommend', {
           method: 'POST',
           headers: {
             'Content-Type': 'application/json',

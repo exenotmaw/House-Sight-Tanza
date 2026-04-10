@@ -32,7 +32,7 @@ const Analysis: React.FC = () => {
     const fetchAnalysis = async () => {
       setIsLoading(true);
       try {
-        const response = await fetch('http://localhost:8000/analyze', {
+        const response = await fetch('https://house-sight-tanza.onrender.com/analyze', {
           method: 'POST',
           headers: { 'Content-Type': 'application/json' },
           body: JSON.stringify({ barangay: selectedBarangay })
