@@ -1,23 +1,29 @@
-from fastapi import FastAPI, HTTPException
+from fastapi import FastAPI, HTTPException, UploadFile, File, Form, Depends
 from fastapi.middleware.cors import CORSMiddleware
+from fastapi.security import OAuth2PasswordBearer, OAuth2PasswordRequestForm
 from pydantic import BaseModel, Field
 import pandas as pd
 import xgboost as xgb
+import io
+import os
+import uuid
+import datetime
 
-# 1. DEFINE 'app' FIRST
+# =====================================================================
+# 1. SERVER SETUP & MIDDLEWARE
+# =====================================================================
 app = FastAPI(title="Tanza House Sight API")
 
-# 2. ADD MIDDLEWARE SECOND
 app.add_middleware(
     CORSMiddleware, 
-    allow_origins=["*"], # This allows Vercel to talk to your backend
+    allow_origins=["*"], 
     allow_credentials=True,
     allow_methods=["*"], 
     allow_headers=["*"],
 )
 
 # =====================================================================
-# BASELINE DICTIONARIES
+# 2. SYSTEM ARCHITECTURE & STATE
 # =====================================================================
 proximity_map = {
     'Amaya': 1.8, 'Bagtas': 6.9, 'Biga': 4.8, 'Biwas': 2.1, 'Bucal': 1.7, 
@@ -32,8 +38,6 @@ GLOBAL_MAX_PRICE = 50000000
 
 all_barangays = sorted(list(proximity_map.keys()))
 spatial_cols = [f"barangay_{b}" for b in all_barangays if b != 'Amaya']
-
-# MASTER FEATURE SET FOR ALL 3 MODELS
 features = ['year', 'proximity_km'] + spatial_cols
 
 model_aqi = xgb.XGBRegressor()
@@ -47,6 +51,112 @@ try:
     print("✅ All Independent AI Models loaded successfully!")
 except Exception as e:
     print(f"⚠️ WARNING: Could not load models: {e}")
+
+# MLOps State
+pending_queue = {}
+dynamic_offsets = {"house_price": {}, "flood_risk": {}, "air_quality": {}}
+os.makedirs("approved_datasets", exist_ok=True)
+
+# =====================================================================
+# 3. AUTHENTICATION LAYER (RBAC)
+# =====================================================================
+oauth2_scheme = OAuth2PasswordBearer(tokenUrl="/admin/login")
+
+ADMIN_USER = "housesightadmin"
+ADMIN_PASS = "housesightpassword"
+
+@app.post("/admin/login")
+def login(form_data: OAuth2PasswordRequestForm = Depends()):
+    if form_data.username == ADMIN_USER and form_data.password == ADMIN_PASS:
+        return {"access_token": "housesight_secure_admin_token_2026", "token_type": "bearer"}
+    raise HTTPException(status_code=400, detail="Incorrect username or password")
+
+def verify_admin(token: str = Depends(oauth2_scheme)):
+    if token != "housesight_secure_admin_token_2026":
+        raise HTTPException(status_code=401, detail="Unauthorized Action. Invalid Token.")
+    return True
+
+# =====================================================================
+# 4. DATA INGESTION & ADMIN ENDPOINTS
+# =====================================================================
+
+@app.post("/public/submit-csv")
+async def public_submit_csv(
+    barangay: str = Form(...), factor: str = Form(...),
+    contributor_name: str = Form(...), file: UploadFile = File(...)
+):
+    try:
+        contents = await file.read()
+        df = pd.read_csv(io.BytesIO(contents))
+        if df.empty or 'value' not in df.columns:
+            raise HTTPException(status_code=400, detail="CSV must contain a 'value' column.")
+            
+        upload_id = str(uuid.uuid4())
+        
+        pending_queue[upload_id] = {
+            "id": upload_id, "barangay": barangay, "factor": factor,
+            "contributor": contributor_name, "filename": file.filename,
+            "status": "Pending Review", "data": df.to_dict() 
+        }
+        return {"status": "success", "message": "File submitted to Admin for review!"}
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=str(e))
+
+@app.get("/admin/queue")
+def get_pending_queue(is_admin: bool = Depends(verify_admin)):
+    return [
+        {"id": k, "barangay": v["barangay"], "factor": v["factor"], 
+         "contributor": v["contributor"], "filename": v["filename"]} 
+        for k, v in pending_queue.items()
+    ]
+
+@app.post("/admin/review/{upload_id}")
+def admin_review(upload_id: str, action: str = Form(...), is_admin: bool = Depends(verify_admin)):
+    if upload_id not in pending_queue:
+        raise HTTPException(status_code=404, detail="Upload not found.")
+        
+    entry = pending_queue[upload_id]
+    
+    if action == "approve":
+        df = pd.DataFrame(entry["data"])
+        t_factor = entry["factor"]
+        t_barangay = entry["barangay"]
+        
+        # --- DYNAMIC BASELINE UPDATE (Instant Change) ---
+        new_average = df['value'].mean()
+        
+        prox = proximity_map.get(t_barangay, 5.0)
+        input_base = {'year': 2025, 'proximity_km': prox}
+        for col in spatial_cols:
+            input_base[col] = 1 if f"barangay_{t_barangay}" == col else 0
+        df_input = pd.DataFrame([input_base])[features]
+        
+        if t_factor == "house_price":
+            base_pred = float(model_price.predict(df_input)[0])
+        elif t_factor == "flood_risk":
+            base_pred = float(model_flood.predict(df_input)[0])
+        else:
+            base_pred = float(model_aqi.predict(df_input)[0])
+            
+        # Calculate and store the offset in live memory
+        offset = new_average - base_pred
+        dynamic_offsets[t_factor][t_barangay] = offset
+        
+        # --- SECURE DATABASE STORAGE (For retrain_pipeline.py) ---
+        timestamp = datetime.datetime.now().strftime("%Y%m%d_%H%M%S")
+        filename = f"approved_datasets/{timestamp}_{t_factor}_{t_barangay.replace(' ', '')}.csv"
+        df.to_csv(filename, index=False)
+        
+        del pending_queue[upload_id]
+        return {"message": f"Approved! System baseline instantly adjusted. Data saved for batch retraining."}
+        
+    elif action == "reject":
+        del pending_queue[upload_id]
+        return {"message": "Upload Rejected and Deleted."}
+
+# =====================================================================
+# 5. PREDICTION ENDPOINTS (STUDIO & ANALYSIS)
+# =====================================================================
 
 class RecommendRequest(BaseModel):
     flood_risk: float = Field(ge=-1.0, le=100.0)
@@ -67,19 +177,26 @@ def get_recommendations(request: RecommendRequest):
     all_predictions = []
     
     for brgy, prox in proximity_map.items():
-        # 1. Prepare SINGLE Input Dataframe
         input_base = {'year': xgboost_year, 'proximity_km': prox}
         for col in spatial_cols:
             input_base[col] = 1 if f"barangay_{brgy}" == col else 0
             
         df_input = pd.DataFrame([input_base])[features]
         
-        # 2. Predict ALL 3 Variables Independently 
         base_aqi = float(model_aqi.predict(df_input)[0])
         base_flood = float(model_flood.predict(df_input)[0])
         base_price = float(model_price.predict(df_input)[0])
         
-        # 3. Apply Future Creep
+        # Apply Dynamic Baseline Offsets
+        base_aqi += dynamic_offsets["air_quality"].get(brgy, 0)
+        base_flood += dynamic_offsets["flood_risk"].get(brgy, 0)
+        base_price += dynamic_offsets["house_price"].get(brgy, 0)
+        
+        base_aqi = max(0.0, base_aqi)
+        base_flood = max(0.0, base_flood)
+        base_price = max(100000.0, base_price)
+        
+        # Apply Future Creep
         p_aqi = base_aqi + (years_into_future * 0.5)
         p_flood = base_flood + (years_into_future * 0.02)
         p_price = base_price * ((1 + 0.06) ** years_into_future)
@@ -127,7 +244,6 @@ def get_recommendations(request: RecommendRequest):
         
         model_value = round((price_score * 0.40) + (flood_score * 0.25) + (prox_score * 0.20) + (aqi_score * 0.15))
         
-        # STRICT PYTHON TYPES ENFORCED HERE
         results.append({
             "id": str(row['barangay'].lower().replace(" ", "-")),
             "name": str(row['barangay']), 
@@ -160,19 +276,25 @@ def analyze_barangay(request: AnalyzeRequest):
         xgboost_year = min(target_year, 2025)
         years_into_future = max(0, target_year - 2025)
         
-        # 1. Prepare SINGLE Input Dataframe
         input_base = {'year': xgboost_year, 'proximity_km': prox}
         for col in spatial_cols:
             input_base[col] = 1 if f"barangay_{target_barangay}" == col else 0
             
         df_input = pd.DataFrame([input_base])[features]
         
-        # 2. Predict ALL 3 Variables Independently using the exact same input
         base_aqi = float(model_aqi.predict(df_input)[0])
         base_flood = float(model_flood.predict(df_input)[0])
         base_price = float(model_price.predict(df_input)[0])
         
-        # 3. Apply Future Creep
+        # Apply Dynamic Baseline Offsets
+        base_aqi += dynamic_offsets["air_quality"].get(target_barangay, 0)
+        base_flood += dynamic_offsets["flood_risk"].get(target_barangay, 0)
+        base_price += dynamic_offsets["house_price"].get(target_barangay, 0)
+        
+        base_aqi = max(0.0, base_aqi)
+        base_flood = max(0.0, base_flood)
+        base_price = max(100000.0, base_price)
+        
         p_aqi = base_aqi + (years_into_future * 0.5)
         p_flood = base_flood + (years_into_future * 0.02)
         p_price = base_price * ((1 + 0.06) ** years_into_future)
