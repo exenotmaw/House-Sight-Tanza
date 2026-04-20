@@ -1,11 +1,12 @@
 import React, { useState } from 'react';
-import { Compass, Library, Lock, ShieldAlert } from 'lucide-react';
+import { Compass, Library, Lock, ShieldAlert, Eye, EyeOff } from 'lucide-react';
 import { useNavigate } from 'react-router-dom';
 
 const Login: React.FC = () => {
   const navigate = useNavigate();
   const [username, setUsername] = useState('');
   const [password, setPassword] = useState('');
+  const [showPassword, setShowPassword] = useState(false); // NEW STATE FOR TOGGLE
   const [error, setError] = useState('');
   const [isLoading, setIsLoading] = useState(false);
 
@@ -14,7 +15,6 @@ const Login: React.FC = () => {
     setIsLoading(true);
     setError('');
 
-    // FastAPI's OAuth2 expects data as Form Data, not JSON
     const formData = new URLSearchParams();
     formData.append('username', username);
     formData.append('password', password);
@@ -28,9 +28,7 @@ const Login: React.FC = () => {
 
       if (response.ok) {
         const data = await response.json();
-        // Save the secure token to the browser's local storage
         localStorage.setItem('adminToken', data.access_token);
-        // Redirect to the now-unlocked admin dashboard
         navigate('/admin');
       } else {
         setError('Access Denied. Invalid credentials.');
@@ -75,15 +73,26 @@ const Login: React.FC = () => {
               required
             />
           </div>
+          
+          {/* PASSWORD FIELD WITH TOGGLE */}
           <div>
             <label className="block font-display text-[10px] tracking-widest uppercase text-academia-mutedForeground mb-2">Passphrase</label>
-            <input 
-              type="password" 
-              value={password}
-              onChange={(e) => setPassword(e.target.value)}
-              className="w-full bg-academia-bg border border-academia-border text-academia-foreground p-3 rounded font-body outline-none focus:border-academia-accent transition-colors"
-              required
-            />
+            <div className="relative">
+              <input 
+                type={showPassword ? "text" : "password"} 
+                value={password}
+                onChange={(e) => setPassword(e.target.value)}
+                className="w-full bg-academia-bg border border-academia-border text-academia-foreground p-3 pr-12 rounded font-body outline-none focus:border-academia-accent transition-colors"
+                required
+              />
+              <button
+                type="button"
+                onClick={() => setShowPassword(!showPassword)}
+                className="absolute right-4 top-1/2 -translate-y-1/2 text-academia-mutedForeground hover:text-academia-accent transition-colors"
+              >
+                {showPassword ? <EyeOff size={18} /> : <Eye size={18} />}
+              </button>
+            </div>
           </div>
 
           {error && (
