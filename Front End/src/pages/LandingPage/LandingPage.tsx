@@ -8,7 +8,10 @@ import {
   Map, 
   Telescope, 
   BookOpen, 
-  Landmark 
+  Landmark, 
+  FileUpIcon,
+  ShieldCheckIcon,
+  DatabaseBackupIcon
 } from 'lucide-react';
 
 // --- DATA ARRAYS ---
@@ -62,6 +65,7 @@ const LandingPage: React.FC = () => {
 
         {/* Buttons Side */}
         <div className="flex gap-6">
+          
           <button 
             onClick={() => navigate('/')} 
             className="flex items-center gap-2 text-academia-accent font-display uppercase tracking-widest text-xs hover:brightness-125 transition-all"
@@ -82,6 +86,11 @@ const LandingPage: React.FC = () => {
           >
             <Scale size={16} /> Analysis
           </button>
+
+          <button onClick={() => navigate('/contribute')} className="flex items-center gap-2 text-academia-mutedForeground hover:text-academia-accent font-display uppercase tracking-widest text-xs transition-all">
+            <FileUpIcon size={16} /> Contribute
+          </button>
+          
         </div>
       </nav>
 
@@ -251,6 +260,62 @@ const LandingPage: React.FC = () => {
             </div>
 
           </div>
+        </div>
+      </section>
+
+      {/* PUBLIC CONTRIBUTION SECTION */}
+      <section className="px-10 py-20 max-w-5xl mx-auto w-full relative z-10 border-t border-academia-border">
+        <div className="text-center mb-12">
+          <span className="font-display text-xs text-academia-accent uppercase tracking-[0.3em] mb-4 block">Crowdsourced Intelligence</span>
+          <h2 className="text-4xl font-heading text-academia-foreground mb-4">Combating Model Drift</h2>
+          <div className="ornate-divider max-w-xs mx-auto mb-6"></div>
+          <p className="text-academia-mutedForeground text-lg max-w-2xl mx-auto italic">
+            Artificial Intelligence degrades over time as real-world economies and environments shift. To ensure our predictions remain highly accurate, House Sight Tanza operates as a living matrix, relying on public data ingestion to continuously update its mathematical baseline.
+          </p>
+        </div>
+
+        <div className="grid grid-cols-1 md:grid-cols-3 gap-8 mb-12">
+          {/* Step 1 */}
+          <div className="bg-academia-bgAlt border border-academia-border rounded p-8 shadow-[0_4px_12px_rgba(0,0,0,0.2)] flex flex-col items-center text-center transition-transform hover:-translate-y-1">
+            <div className="w-12 h-12 rounded-full bg-academia-bg border border-academia-accent flex items-center justify-center text-academia-accent mb-4">
+              <FileUpIcon size={20} />
+            </div>
+            <h3 className="font-heading text-xl text-academia-foreground mb-2">1. Public Submission</h3>
+            <p className="font-body text-sm text-academia-mutedForeground">
+              Researchers, LGUs, and citizens can upload localized CSV datasets containing recent housing prices, flood risks, or air quality indices.
+            </p>
+          </div>
+
+          {/* Step 2 */}
+          <div className="bg-academia-bgAlt border border-academia-border rounded p-8 shadow-[0_4px_12px_rgba(0,0,0,0.2)] flex flex-col items-center text-center transition-transform hover:-translate-y-1">
+            <div className="w-12 h-12 rounded-full bg-academia-bg border border-academia-accent flex items-center justify-center text-academia-accent mb-4">
+              <ShieldCheckIcon size={20} />
+            </div>
+            <h3 className="font-heading text-xl text-academia-foreground mb-2">2. Maker-Checker Review</h3>
+            <p className="font-body text-sm text-academia-mutedForeground">
+              To preserve data integrity, all submissions enter a staging queue. A system administrator must review and authorize the data before integration.
+            </p>
+          </div>
+
+          {/* Step 3 */}
+          <div className="bg-academia-bgAlt border border-academia-border rounded p-8 shadow-[0_4px_12px_rgba(0,0,0,0.2)] flex flex-col items-center text-center transition-transform hover:-translate-y-1">
+            <div className="w-12 h-12 rounded-full bg-academia-bg border border-academia-accent flex items-center justify-center text-academia-accent mb-4">
+              <DatabaseBackupIcon size={20} />
+            </div>
+            <h3 className="font-heading text-xl text-academia-foreground mb-2">3. Batch MLOps Retraining</h3>
+            <p className="font-body text-sm text-academia-mutedForeground">
+              Approved datasets instantly update the system baseline, while an automated end-of-month pipeline retrains the core XGBoost engine.
+            </p>
+          </div>
+        </div>
+
+        <div className="flex justify-center">
+          <button 
+            onClick={() => navigate('/contribute')} 
+            className="px-8 py-4 rounded font-display uppercase tracking-widest text-xs flex items-center justify-center gap-2 bg-brass-gradient text-[#1C1714] font-bold hover:brightness-110 shadow-[0_4px_12px_rgba(0,0,0,0.3)] transition-all"
+          >
+            <FileUpIcon size={16} /> Contribute to the Matrix
+          </button>
         </div>
       </section>
       

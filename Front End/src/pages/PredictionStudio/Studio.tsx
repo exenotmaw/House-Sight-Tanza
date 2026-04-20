@@ -1,6 +1,6 @@
 import { useNavigate } from 'react-router-dom';
 import React, { useState, useEffect } from 'react';
-import { Compass, Library, ScrollText, Scale, Hourglass, Star, Loader2, Sparkles, Map } from 'lucide-react';
+import { Compass, Library, ScrollText, Scale, Hourglass, Star, Loader2, Sparkles, Map, FileUpIcon } from 'lucide-react';
 // IMPORT YOUR NEW MAP HERE:
 import TanzaDarkMap from './TanzaMap'; // Check this path matches where you saved it!
 
@@ -145,6 +145,9 @@ const Studio: React.FC = () => {
           </button>
           <button onClick={() => navigate('/analysis')} className="flex items-center gap-2 text-academia-mutedForeground hover:text-academia-accent font-display uppercase tracking-widest text-xs transition-all">
             <Scale size={16} /> Analysis
+          </button>
+          <button onClick={() => navigate('/contribute')} className="flex items-center gap-2 text-academia-mutedForeground hover:text-academia-accent font-display uppercase tracking-widest text-xs transition-all">
+            <FileUpIcon size={16} /> Contribute
           </button>
         </div>
       </nav>

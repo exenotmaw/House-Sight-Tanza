@@ -1,5 +1,5 @@
 import React, { useState, useEffect } from 'react';
-import { Compass, Library, ScrollText, Scale, ChevronDown, Hourglass, BookOpen, Landmark } from 'lucide-react';
+import { Compass, Library, ScrollText, Scale, ChevronDown, Hourglass, BookOpen, Landmark, FileUpIcon } from 'lucide-react';
 import { useNavigate } from 'react-router-dom';
 import { 
   BarChart, Bar, XAxis, YAxis, CartesianGrid, Tooltip, ResponsiveContainer,
@@ -166,6 +166,9 @@ const Analysis: React.FC = () => {
           </button>
           <button onClick={() => navigate('/analysis')} className="flex items-center gap-2 text-academia-accent font-display uppercase tracking-widest text-xs hover:brightness-125 transition-all">
             <Scale size={16} /> Analysis
+          </button>
+          <button onClick={() => navigate('/contribute')} className="flex items-center gap-2 text-academia-mutedForeground hover:text-academia-accent font-display uppercase tracking-widest text-xs transition-all">
+            <FileUpIcon size={16} /> Contribute
           </button>
         </div>
       </nav>
