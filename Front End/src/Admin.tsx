@@ -1,5 +1,5 @@
 import React, { useState, useEffect } from 'react';
-import { Compass, Library, ScrollText, Scale, CheckCircle, XCircle, Clock, Lock, Database, Eye, X } from 'lucide-react';
+import { Compass, Library, CheckCircle, XCircle, Clock, Lock, Database, Eye, X } from 'lucide-react';
 import { useNavigate } from 'react-router-dom';
 
 const Admin: React.FC = () => {
