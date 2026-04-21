@@ -154,6 +154,53 @@ def admin_review(upload_id: str, action: str = Form(...), is_admin: bool = Depen
         del pending_queue[upload_id]
         return {"message": "Upload Rejected and Deleted."}
 
+@app.get("/admin/approved-files")
+def get_approved_files(is_admin: bool = Depends(verify_admin)):
+    """Fetches a list of all currently approved files sitting on the server."""
+    approved_dir = "approved_datasets"
+    if not os.path.exists(approved_dir):
+        return []
+    
+    files = []
+    for filename in os.listdir(approved_dir):
+        if filename.endswith(".csv"):
+            parts = filename.replace('.csv', '').split('_')
+            if len(parts) >= 3:
+                files.append({
+                    "filename": filename,
+                    "timestamp": parts[0] + "_" + parts[1],
+                    "factor": parts[2] if len(parts) == 4 else parts[2] + "_" + parts[3], 
+                    "barangay": parts[-1]
+                })
+    
+    files.sort(key=lambda x: x["timestamp"], reverse=True)
+    return files
+
+@app.delete("/admin/approved-files/{filename}")
+def delete_approved_file(filename: str, is_admin: bool = Depends(verify_admin)):
+    """Deletes the physical file and resets the live math offset."""
+    file_path = os.path.join("approved_datasets", filename)
+    
+    if not os.path.exists(file_path):
+        raise HTTPException(status_code=404, detail="File not found.")
+        
+    try:
+        parts = filename.replace('.csv', '').split('_')
+        barangay = parts[-1]
+        
+        if "house_price" in filename: factor = "house_price"
+        elif "flood_risk" in filename: factor = "flood_risk"
+        else: factor = "air_quality"
+        
+        os.remove(file_path)
+        
+        if factor in dynamic_offsets and barangay in dynamic_offsets[factor]:
+            dynamic_offsets[factor][barangay] = 0
+            
+        return {"message": "File permanently deleted. Math baseline restored."}
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=str(e))
+
 # =====================================================================
 # 5. PREDICTION ENDPOINTS (STUDIO & ANALYSIS)
 # =====================================================================
