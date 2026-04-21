@@ -1,21 +1,22 @@
 import React, { useState, useEffect } from 'react';
-import { Compass, Library, ScrollText, Scale, CheckCircle, XCircle, Clock, Lock } from 'lucide-react';
+import { Compass, Library, ScrollText, Scale, CheckCircle, XCircle, Clock, Lock, Database } from 'lucide-react';
 import { useNavigate } from 'react-router-dom';
 
 const Admin: React.FC = () => {
   const navigate = useNavigate();
   const [queue, setQueue] = useState<any[]>([]);
+  const [approvedFiles, setApprovedFiles] = useState<any[]>([]);
   const [loading, setLoading] = useState(true);
 
-  // 1. SECURITY CHECK: Ensure the admin has a valid token
+  // SECURITY CHECK
   const token = localStorage.getItem('adminToken');
 
   useEffect(() => {
-    // If there is no token, immediately kick them out to the login page
     if (!token) {
       navigate('/admin/login');
     } else {
       fetchQueue();
+      fetchApprovedFiles();
     }
   }, [token, navigate]);
 
@@ -24,20 +25,17 @@ const Admin: React.FC = () => {
     navigate('/admin/login');
   };
 
-  // 2. FETCH QUEUE: Ask the server for pending datasets
+  // FETCH QUEUE
   const fetchQueue = async () => {
     try {
       const response = await fetch('https://house-sight-tanza.onrender.com/admin/queue', {
-        headers: { 
-          'Authorization': `Bearer ${token}` 
-        }
+        headers: { 'Authorization': `Bearer ${token}` }
       });
       
       if (response.ok) {
         const data = await response.json();
         setQueue(data);
       } else if (response.status === 401) {
-        // Token expired or invalid
         handleLogout();
       }
     } catch (error) {
@@ -47,7 +45,22 @@ const Admin: React.FC = () => {
     }
   };
 
-  // 3. REVIEW ACTION: Approve or Reject the file
+  // FETCH APPROVED FILES
+  const fetchApprovedFiles = async () => {
+    try {
+      const response = await fetch('https://house-sight-tanza.onrender.com/admin/approved-files', {
+        headers: { 'Authorization': `Bearer ${token}` }
+      });
+      if (response.ok) {
+        const data = await response.json();
+        setApprovedFiles(data);
+      }
+    } catch (error) {
+      console.error("Failed to fetch approved files", error);
+    }
+  };
+
+  // REVIEW ACTION (Approve/Reject Pending)
   const handleReview = async (id: string, action: 'approve' | 'reject') => {
     const formData = new FormData();
     formData.append('action', action);
@@ -55,15 +68,13 @@ const Admin: React.FC = () => {
     try {
       const response = await fetch(`https://house-sight-tanza.onrender.com/admin/review/${id}`, {
         method: 'POST',
-        headers: { 
-          'Authorization': `Bearer ${token}` 
-        },
+        headers: { 'Authorization': `Bearer ${token}` },
         body: formData
       });
 
       if (response.ok) {
-        // Refresh the queue to show the file has been removed
         fetchQueue();
+        fetchApprovedFiles(); // Refresh the list of approved files
       } else {
         alert("Action failed. You might not have the correct permissions.");
       }
@@ -72,7 +83,26 @@ const Admin: React.FC = () => {
     }
   };
 
-  // Don't render the dashboard if they are being redirected
+  // DELETE APPROVED FILE (Revert Baseline)
+  const handleDeleteApproved = async (filename: string) => {
+    if (!window.confirm("Are you sure? This will delete the dataset and reset the live prediction baseline.")) return;
+    
+    try {
+      const response = await fetch(`https://house-sight-tanza.onrender.com/admin/approved-files/${filename}`, {
+        method: 'DELETE',
+        headers: { 'Authorization': `Bearer ${token}` }
+      });
+
+      if (response.ok) {
+        fetchApprovedFiles();
+      } else {
+        alert("Action failed. You might not have the correct permissions.");
+      }
+    } catch (error) {
+      alert("Network error.");
+    }
+  };
+
   if (!token) return null; 
 
   return (
@@ -107,10 +137,9 @@ const Admin: React.FC = () => {
         <p className="text-academia-mutedForeground text-lg italic">Review and authorize datasets submitted by public contributors before they enter the prediction matrix.</p>
       </header>
 
-      {/* QUEUE DASHBOARD */}
       <main className="px-8 max-w-4xl w-full mx-auto">
+        {/* QUEUE DASHBOARD */}
         <div className="bg-academia-bgAlt border border-academia-border rounded p-8 shadow-[0_8px_24px_rgba(0,0,0,0.3)] corner-flourish">
-          
           {loading ? (
             <div className="flex flex-col items-center justify-center py-10 text-academia-accent">
                <p className="font-display tracking-[0.2em] text-xs uppercase animate-pulse">Scanning Secure Queue...</p>
@@ -151,6 +180,46 @@ const Admin: React.FC = () => {
                       <CheckCircle size={14} /> Approve
                     </button>
                   </div>
+                </div>
+              ))}
+            </div>
+          )}
+        </div>
+
+        {/* APPROVED FILES HISTORY */}
+        <div className="bg-academia-bgAlt border border-academia-border rounded p-8 shadow-[0_8px_24px_rgba(0,0,0,0.3)] corner-flourish mt-8">
+          <div className="flex items-center gap-3 mb-6 border-b border-academia-border pb-4">
+            <Database size={24} className="text-academia-accent" />
+            <h2 className="text-2xl font-heading text-academia-foreground">Integrated Datasets</h2>
+          </div>
+
+          {approvedFiles.length === 0 ? (
+            <div className="text-center py-8 text-academia-mutedForeground font-body italic text-sm">
+              No datasets have been integrated into the system yet.
+            </div>
+          ) : (
+            <div className="space-y-3">
+              {approvedFiles.map((file) => (
+                <div key={file.filename} className="bg-academia-bg border border-academia-border/50 p-4 rounded flex justify-between items-center transition-colors hover:border-academia-border">
+                  <div>
+                    <div className="flex items-center gap-2 mb-1">
+                      <span className="text-academia-accent font-display text-[9px] tracking-widest uppercase bg-academia-bgAlt px-2 py-0.5 rounded border border-academia-accent/20">
+                        {file.factor.replace('_', ' ')}
+                      </span>
+                      <span className="font-heading text-sm text-[#E8DFD4]">{file.barangay}</span>
+                    </div>
+                    <p className="text-[10px] font-mono text-academia-mutedForeground opacity-70">
+                      File: {file.filename}
+                    </p>
+                  </div>
+                  
+                  <button 
+                    onClick={() => handleDeleteApproved(file.filename)}
+                    className="p-2 text-academia-mutedForeground hover:text-academia-accentSecondary hover:bg-academia-accentSecondary/10 rounded transition-all"
+                    title="Delete and Revert Baseline"
+                  >
+                    <XCircle size={18} />
+                  </button>
                 </div>
               ))}
             </div>
