@@ -210,6 +210,26 @@ def delete_approved_file(filename: str, is_admin: bool = Depends(verify_admin)):
         return {"message": "File permanently deleted. Math baseline restored."}
     except Exception as e:
         raise HTTPException(status_code=500, detail=str(e))
+    
+@app.get("/admin/queue/{upload_id}/data")
+def get_pending_data(upload_id: str, is_admin: bool = Depends(verify_admin)):
+    """Allows the Admin to peek inside a pending file before approving it."""
+    if upload_id not in pending_queue:
+        raise HTTPException(status_code=404, detail="Upload not found.")
+    
+    # Extract the data from the live RAM queue and send it as a list of rows
+    df = pd.DataFrame(pending_queue[upload_id]["data"])
+    return df.to_dict(orient="records")
+
+@app.get("/admin/approved-files/{filename}/data")
+def get_approved_data(filename: str, is_admin: bool = Depends(verify_admin)):
+    """Allows the Admin to look inside a file that is already saved."""
+    file_path = os.path.join("approved_datasets", filename)
+    if not os.path.exists(file_path):
+        raise HTTPException(status_code=404, detail="File not found.")
+        
+    df = pd.read_csv(file_path)
+    return df.to_dict(orient="records")
 
 # =====================================================================
 # 5. PREDICTION ENDPOINTS (STUDIO & ANALYSIS)
