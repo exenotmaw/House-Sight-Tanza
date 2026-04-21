@@ -122,9 +122,7 @@ def admin_review(upload_id: str, action: str = Form(...), is_admin: bool = Depen
         t_factor = entry["factor"]
         t_barangay = entry["barangay"]
         
-        # --- DYNAMIC BASELINE UPDATE (Instant Change) ---
-        new_average = df['value'].mean()
-        
+        # 1. Get the AI's current baseline prediction FIRST
         prox = proximity_map.get(t_barangay, 5.0)
         input_base = {'year': 2025, 'proximity_km': prox}
         for col in spatial_cols:
@@ -138,8 +136,24 @@ def admin_review(upload_id: str, action: str = Form(...), is_admin: bool = Depen
         else:
             base_pred = float(model_aqi.predict(df_input)[0])
             
-        # Calculate and store the offset in live memory
-        offset = new_average - base_pred
+        # 2. MATHEMATICAL FIX: Calculate the Weighted Shift using Historical Data
+        master_filename = f"master_{t_factor}.csv"
+        try:
+            historical_data = pd.read_csv(master_filename)
+            # Find all past records for this specific barangay
+            hist_brgy = historical_data[historical_data['barangay'] == t_barangay]
+            
+            # Combine the old history with the newly approved data
+            combined_values = pd.concat([hist_brgy['value'], df['value']])
+            
+            # Calculate the true, weighted average
+            true_new_average = combined_values.mean()
+        except FileNotFoundError:
+            # Fallback if the master file doesn't exist yet
+            true_new_average = df['value'].mean()
+            
+        # 3. Calculate and store the fractional offset
+        offset = true_new_average - base_pred
         dynamic_offsets[t_factor][t_barangay] = offset
         
         # --- SECURE DATABASE STORAGE (For retrain_pipeline.py) ---
@@ -149,10 +163,6 @@ def admin_review(upload_id: str, action: str = Form(...), is_admin: bool = Depen
         
         del pending_queue[upload_id]
         return {"message": f"Approved! System baseline instantly adjusted. Data saved for batch retraining."}
-        
-    elif action == "reject":
-        del pending_queue[upload_id]
-        return {"message": "Upload Rejected and Deleted."}
 
 @app.get("/admin/approved-files")
 def get_approved_files(is_admin: bool = Depends(verify_admin)):
