@@ -1,0 +1,6 @@
+Pixel Count - 
+Level 1 pixel count (Low (Purple)) - 
+Level 2 pixel count (Medium (Blue)) - 
+Level 2 pixel count (High (Dark Blue)) - 
+
+Total Score = 
