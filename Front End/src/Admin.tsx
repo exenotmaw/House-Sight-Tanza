@@ -85,11 +85,26 @@ const Admin: React.FC = () => {
   };
 
   const handleReview = async (id: string, action: 'approve' | 'reject') => {
-    const formData = new FormData(); formData.append('action', action);
+    const formData = new FormData(); 
+    formData.append('action', action);
     try {
-      const res = await fetch(`https://house-sight-tanza.onrender.com/admin/review/${id}`, { method: 'POST', headers: { 'Authorization': `Bearer ${token}` }, body: formData });
-      if (res.ok) { fetchQueue(); fetchApprovedFiles(); } else alert("Permission Denied.");
-    } catch (e) { alert("Network Error."); }
+      const res = await fetch(`https://house-sight-tanza.onrender.com/admin/review/${id}`, { 
+        method: 'POST', 
+        headers: { 'Authorization': `Bearer ${token}` }, 
+        body: formData 
+      });
+      
+      if (res.ok) { 
+        fetchQueue(); 
+        fetchApprovedFiles(); 
+      } else {
+        // THE FIX: Extract the exact error from FastAPI
+        const errorData = await res.json();
+        alert(`SERVER ERROR: ${errorData.detail}`);
+      }
+    } catch (e) { 
+      alert("Network Error: Could not reach the server."); 
+    }
   };
 
   const handleDeleteApproved = async (filename: string) => {
