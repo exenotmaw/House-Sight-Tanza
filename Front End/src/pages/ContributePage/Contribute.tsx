@@ -1,6 +1,33 @@
-import React, { useState } from 'react';
-import { Compass, Library, ScrollText, Scale, UploadCloud, Database, FileUp } from 'lucide-react';
+import React, { useState, useEffect } from 'react';
+import { Compass, UploadCloud, Database, Download, ChevronDown, CheckCircle2, AlertTriangle, Cpu } from 'lucide-react';
 import { useNavigate } from 'react-router-dom';
+
+// --- DESIGN SYSTEM CONSTANTS (Industrial Skeuomorphism) ---
+const theme = {
+  chassis: "bg-[#e0e5ec]",
+  text: "text-[#2d3436]",
+  textMuted: "text-[#4a5568]",
+  accent: "text-[#ff4757]",
+  panel: "bg-[#e0e5ec] rounded-2xl shadow-[8px_8px_16px_#babecc,-8px_-8px_16px_#ffffff]",
+  recessed: "bg-[#e0e5ec] rounded-xl shadow-[inset_4px_4px_8px_#babecc,inset_-4px_-4px_8px_#ffffff]",
+  input: "w-full bg-transparent outline-none font-mono text-sm font-bold text-[#2d3436] placeholder-[#4a5568]/50 p-4 focus:shadow-[inset_4px_4px_8px_#babecc,inset_-4px_-4px_8px_#ffffff,0_0_0_2px_#ff4757] rounded-xl transition-shadow",
+  btnBase: "flex items-center justify-center gap-2 px-6 py-3 font-bold text-xs uppercase tracking-[0.1em] transition-all duration-150 active:translate-y-[2px]",
+  btnStandard: "bg-[#e0e5ec] text-[#4a5568] rounded-xl shadow-[6px_6px_12px_#babecc,-6px_-6px_12px_#ffffff] active:shadow-[inset_4px_4px_8px_#babecc,inset_-4px_-4px_8px_#ffffff] hover:text-[#ff4757]",
+  btnAccent: "bg-[#ff4757] text-white rounded-xl shadow-[4px_4px_8px_rgba(166,50,60,0.4),-4px_-4px_8px_rgba(255,100,110,0.4)] active:shadow-[inset_6px_6px_12px_rgba(180,30,40,0.6),inset_-2px_-2px_4px_rgba(255,100,100,0.4)] hover:brightness-110 disabled:opacity-50 disabled:active:translate-y-0 disabled:active:shadow-[4px_4px_8px_rgba(166,50,60,0.4),-4px_-4px_8px_rgba(255,100,110,0.4)] disabled:cursor-not-allowed",
+};
+
+// --- MANUFACTURING HARDWARE COMPONENTS ---
+const Screw = () => (
+  <div className="w-3 h-3 rounded-full shadow-[inset_1px_1px_2px_rgba(0,0,0,0.2)]" 
+       style={{ background: 'radial-gradient(circle at 3px 3px, rgba(0,0,0,0.1) 1px, transparent 2px), radial-gradient(circle at 9px 9px, rgba(0,0,0,0.1) 1px, transparent 2px), #d1d9e6' }}>
+  </div>
+);
+
+const TapeLabel = ({ text, color = "bg-[#eccc68]" }: { text: string, color?: string }) => (
+  <div className={`px-3 py-1 ${color} border border-black/10 shadow-sm skew-x-[-12deg] inline-flex items-center justify-center`}>
+    <span className="font-mono text-[9px] font-black uppercase text-[#2d3436] skew-x-[12deg] tracking-widest">{text}</span>
+  </div>
+);
 
 const barangays = [
   'Amaya', 'Bagtas', 'Biga', 'Biwas', 'Bucal', 'Bunga', 'Calibuyo', 'Capipisa', 
@@ -23,6 +50,11 @@ const Contribute: React.FC = () => {
   const [isUploading, setIsUploading] = useState(false);
   const [uploadStatus, setUploadStatus] = useState<{type: 'success' | 'error' | null, message: string}>({ type: null, message: '' });
 
+  useEffect(() => {
+    // Strip away dark mode to respect the industrial palette
+    document.documentElement.classList.remove('dark');
+  }, []);
+
   const handleFileChange = (e: React.ChangeEvent<HTMLInputElement>) => {
     if (e.target.files && e.target.files[0]) {
       setFile(e.target.files[0]);
@@ -44,7 +76,7 @@ const Contribute: React.FC = () => {
 
   const handleSubmit = async () => {
     if (!file || !contributorName) {
-      setUploadStatus({ type: 'error', message: 'Please provide your name and select a CSV file.' });
+      setUploadStatus({ type: 'error', message: 'ERR: DATASET OR IDENTIFIER MISSING' });
       return;
     }
 
@@ -66,136 +98,185 @@ const Contribute: React.FC = () => {
       const data = await response.json();
 
       if (response.ok) {
-        setUploadStatus({ type: 'success', message: 'Success! Your dataset has been sent to the Admin for review.' });
+        setUploadStatus({ type: 'success', message: 'DATASET TRANSMITTED FOR ADMIN REVIEW' });
         setFile(null);
         setContributorName(''); 
       } else {
-        setUploadStatus({ type: 'error', message: data.detail || 'Submission failed.' });
+        setUploadStatus({ type: 'error', message: data.detail || 'ERR: TRANSMISSION FAILED' });
       }
     } catch (error) {
-      setUploadStatus({ type: 'error', message: 'Network error. Could not reach the server.' });
+      setUploadStatus({ type: 'error', message: 'SYS_OFFLINE: UPLINK DISCONNECTED' });
     } finally {
       setIsUploading(false);
     }
   };
 
   return (
-    <div className="min-h-screen relative z-10 flex flex-col pb-20">
-      <nav className="border-b border-academia-border px-8 py-5 flex justify-between items-center z-20 bg-academia-bg/90 backdrop-blur-sm sticky top-0">
-        <div className="flex items-center gap-3 text-academia-accent font-display tracking-widest uppercase text-sm">
-          <Compass size={22} className="text-academia-accent" />
-          <span>House Sight Tanza</span>
+    <div className={`min-h-screen relative z-10 flex flex-col pb-20 font-sans ${theme.chassis} ${theme.text}`}>
+      
+      {/* MACRO-TEXTURE */}
+      <div className="absolute inset-0 opacity-[0.25] pointer-events-none mix-blend-overlay" style={{ backgroundImage: 'url("https://www.transparenttextures.com/patterns/stardust.png")' }}></div>
+
+      {/* NAV PANEL */}
+      <nav className={`${theme.panel} mx-6 mt-6 px-8 py-5 flex justify-between items-center sticky top-6 z-50`}>
+        
+        {/* CLICKABLE BRAND LOGO */}
+        <div 
+          onClick={() => navigate('/')} 
+          className="flex items-center gap-4 cursor-pointer group"
+        >
+          <div className={`${theme.recessed} p-2 flex items-center justify-center group-active:shadow-[inset_6px_6px_12px_#babecc,inset_-6px_-6px_12px_#ffffff] transition-all`}>
+            <Compass size={20} className="text-[#2d3436] group-hover:text-[#ff4757] transition-colors" />
+          </div>
+          <h1 className="font-black tracking-widest uppercase text-xs drop-shadow-[0_1px_0_#ffffff] text-[#2d3436] group-hover:text-[#ff4757] transition-colors">
+            House Sight Tanza
+          </h1>
         </div>
-        <div className="flex gap-6">
-          <button onClick={() => navigate('/')} className="flex items-center gap-2 text-academia-mutedForeground hover:text-academia-accent font-display uppercase tracking-widest text-xs transition-all">
-            <Library size={16} /> Home
-          </button>
-          <button onClick={() => navigate('/studio')} className="flex items-center gap-2 text-academia-mutedForeground hover:text-academia-accent font-display uppercase tracking-widest text-xs transition-all">
-            <ScrollText size={16} /> Studio
-          </button>
-          <button onClick={() => navigate('/analysis')} className="flex items-center gap-2 text-academia-mutedForeground hover:text-academia-accent font-display uppercase tracking-widest text-xs transition-all">
-            <Scale size={16} /> Analysis
-          </button>
-          <button className="flex items-center gap-2 text-academia-accent font-display uppercase tracking-widest text-xs">
-            <FileUp size={16} /> Contribute
-          </button>
+        <div className="hidden md:flex gap-4">
+          <button onClick={() => navigate('/')} className={`${theme.btnBase} ${theme.btnStandard} !px-4 !py-2`}>Home</button>
+          <button onClick={() => navigate('/studio')} className={`${theme.btnBase} ${theme.btnStandard} !px-4 !py-2`}> Studio</button>
+          <button onClick={() => navigate('/analysis')} className={`${theme.btnBase} ${theme.btnStandard} !px-4 !py-2`}> Analysis</button>
+          <button className={`${theme.btnBase} ${theme.btnAccent} !px-4 !py-2`}>Contribute</button>
         </div>
       </nav>
 
-      <header className="px-10 pt-16 pb-10 text-center max-w-4xl mx-auto w-full">
-        <span className="font-display text-xs text-academia-accent uppercase tracking-[0.3em] mb-4 block">Public Data Ingestion</span>
-        <h1 className="text-5xl font-heading text-academia-foreground mb-4">Contribute to the Matrix</h1>
-        <div className="ornate-divider max-w-xs mx-auto mb-6"></div>
-        <p className="text-academia-mutedForeground text-lg italic">Submit local datasets to help improve the accuracy of our predictive models. All submissions are reviewed by an administrator before integration.</p>
+      {/* HEADER */}
+      <header className="px-10 pt-16 pb-10 text-center max-w-4xl mx-auto w-full relative z-10">
+        <TapeLabel text="Public Data Ingestion" />
+        <h1 className="text-5xl md:text-6xl font-black uppercase mt-6 tracking-tight drop-shadow-[0_2px_0_#ffffff] text-[#2d3436]">
+          Data Portal
+        </h1>
+        <p className="text-[#4a5568] text-lg font-medium italic mt-4 max-w-2xl mx-auto drop-shadow-[0_1px_0_#ffffff]">
+          Submit raw telemetry to enhance the predictive matrix. All submissions require Maker-Checker authorization prior to integration.
+        </p>
       </header>
 
-      <main className="px-8 max-w-2xl w-full mx-auto">
-        <div className="bg-academia-bgAlt border border-academia-border rounded p-8 shadow-[0_8px_24px_rgba(0,0,0,0.3)] corner-flourish">
+      <main className="px-6 max-w-2xl w-full mx-auto relative z-10">
+        <div className={`${theme.panel} p-8 md:p-12 relative flex flex-col gap-8`}>
+          <div className="absolute top-4 left-4"><Screw /></div>
+          <div className="absolute top-4 right-4"><Screw /></div>
+          <div className="absolute bottom-4 left-4"><Screw /></div>
+          <div className="absolute bottom-4 right-4"><Screw /></div>
           
-          <div className="mb-6">
-            <label className="block font-display text-[10px] tracking-widest uppercase text-academia-mutedForeground mb-2">Contributor Name / Organization</label>
-            <input 
-              type="text"
-              placeholder="e.g., John Doe or Tanza LGU"
-              className="w-full bg-academia-bg border border-academia-border text-academia-foreground p-3 rounded font-body outline-none focus:border-academia-accent transition-colors"
-              value={contributorName}
-              onChange={(e) => setContributorName(e.target.value)}
-            />
-          </div>
+          <h2 className="font-black uppercase text-xl tracking-tight drop-shadow-[0_1px_0_#ffffff] flex items-center gap-2 mb-2 border-b border-[#babecc]/50 pb-4">
+            <Cpu size={20} className={theme.accent}/> Ingestion Interface
+          </h2>
 
-          <div className="grid grid-cols-2 gap-4 mb-6">
-            <div>
-              <label className="block font-display text-[10px] tracking-widest uppercase text-academia-mutedForeground mb-2">Target Municipality</label>
-              <select 
-                className="w-full bg-academia-bg border border-academia-border text-academia-foreground p-3 rounded font-body outline-none focus:border-academia-accent transition-colors"
-                value={selectedBarangay}
-                onChange={(e) => setSelectedBarangay(e.target.value)}
-              >
-                {barangays.map(b => <option key={b} value={b}>{b}</option>)}
-              </select>
-            </div>
-
-            <div>
-              <label className="block font-display text-[10px] tracking-widest uppercase text-academia-mutedForeground mb-2">Environmental Variable</label>
-              <select 
-                className="w-full bg-academia-bg border border-academia-border text-academia-foreground p-3 rounded font-body outline-none focus:border-academia-accent transition-colors"
-                value={selectedFactor}
-                onChange={(e) => setSelectedFactor(e.target.value)}
-              >
-                {factors.map(f => <option key={f.id} value={f.id}>{f.label}</option>)}
-              </select>
+          {/* NAME FIELD */}
+          <div>
+            <label className="block font-mono text-[10px] font-bold tracking-[0.08em] uppercase text-[#4a5568] mb-2 pl-1 drop-shadow-[0_1px_0_#ffffff]">
+              Operator / Organization Identifier
+            </label>
+            <div className={theme.recessed}>
+              <input 
+                type="text"
+                placeholder="e.g., John Doe or Tanza LGU"
+                className={theme.input}
+                value={contributorName}
+                onChange={(e) => setContributorName(e.target.value)}
+              />
             </div>
           </div>
 
-          <div className="mb-4">
-            <label className="block font-display text-[10px] tracking-widest uppercase text-academia-mutedForeground mb-2">Dataset Upload (CSV only)</label>
-            <div className="border-2 border-dashed border-academia-border hover:border-academia-accent/50 bg-academia-bg rounded-lg p-10 flex flex-col items-center justify-center transition-colors relative">
+          <div className="grid grid-cols-1 md:grid-cols-2 gap-6">
+            {/* TARGET MUNICIPALITY */}
+            <div>
+              <label className="block font-mono text-[10px] font-bold tracking-[0.08em] uppercase text-[#4a5568] mb-2 pl-1 drop-shadow-[0_1px_0_#ffffff]">
+                Target Sector
+              </label>
+              <div className={`${theme.recessed} relative`}>
+                <select 
+                  className={`${theme.input} appearance-none cursor-pointer pr-10`}
+                  value={selectedBarangay}
+                  onChange={(e) => setSelectedBarangay(e.target.value)}
+                >
+                  {barangays.map(b => <option key={b} value={b}>{b}</option>)}
+                </select>
+                <ChevronDown size={16} className="absolute right-4 top-1/2 -translate-y-1/2 text-[#4a5568] pointer-events-none" />
+              </div>
+            </div>
+
+            {/* ENVIRONMENTAL VARIABLE */}
+            <div>
+              <label className="block font-mono text-[10px] font-bold tracking-[0.08em] uppercase text-[#4a5568] mb-2 pl-1 drop-shadow-[0_1px_0_#ffffff]">
+                Telemetry Type
+              </label>
+              <div className={`${theme.recessed} relative`}>
+                <select 
+                  className={`${theme.input} appearance-none cursor-pointer pr-10`}
+                  value={selectedFactor}
+                  onChange={(e) => setSelectedFactor(e.target.value)}
+                >
+                  {factors.map(f => <option key={f.id} value={f.id}>{f.label}</option>)}
+                </select>
+                <ChevronDown size={16} className="absolute right-4 top-1/2 -translate-y-1/2 text-[#4a5568] pointer-events-none" />
+              </div>
+            </div>
+          </div>
+
+          {/* FILE DROPZONE (Recessed Port) */}
+          <div>
+            <label className="block font-mono text-[10px] font-bold tracking-[0.08em] uppercase text-[#4a5568] mb-2 pl-1 drop-shadow-[0_1px_0_#ffffff] flex justify-between items-end">
+              <span>Data Block (.csv only)</span>
+              <button 
+                onClick={handleDownloadTemplate}
+                className="text-[#ff4757] hover:text-[#2d3436] flex items-center gap-1 font-mono text-[9px] transition-colors"
+                title="Download Template"
+              >
+                <Download size={12}/> Get Template
+              </button>
+            </label>
+            
+            <div className={`${theme.recessed} relative flex flex-col items-center justify-center p-12 text-center border-2 border-dashed border-[#babecc]/50 hover:border-[#ff4757] transition-colors duration-300 group overflow-hidden`}>
               <input 
                 type="file" 
                 accept=".csv"
                 onChange={handleFileChange}
-                className="absolute inset-0 w-full h-full opacity-0 cursor-pointer"
+                className="absolute inset-0 w-full h-full opacity-0 cursor-pointer z-10"
               />
-              <Database size={32} className={`mb-3 ${file ? 'text-academia-accent' : 'text-academia-mutedForeground'}`} />
-              <p className="text-academia-foreground font-body text-sm text-center">
-                {file ? (
-                  <span className="text-academia-accent font-bold">{file.name}</span>
-                ) : (
-                  <span>Drag and drop your <span className="font-bold">.csv</span> file here, or click to browse.</span>
-                )}
-              </p>
+              
+              {/* Internal styling based on file presence */}
+              <div className={`w-16 h-16 rounded-full flex items-center justify-center mb-4 shadow-[4px_4px_8px_#babecc,-4px_-4px_8px_#ffffff] bg-[#e0e5ec] transition-transform duration-300 group-hover:-translate-y-1 ${file ? 'text-[#2ed573]' : 'text-[#a3b1c6]'}`}>
+                <Database size={28} />
+              </div>
+              
+              {file ? (
+                <div className="font-mono text-sm font-black text-[#2ed573] flex flex-col items-center gap-2">
+                  <CheckCircle2 size={20} />
+                  <span>{file.name} LOADED</span>
+                </div>
+              ) : (
+                <p className="font-mono text-[11px] font-bold text-[#4a5568] uppercase tracking-widest leading-relaxed">
+                  Insert .CSV block here <br/> or <span className="text-[#ff4757]">click to browse system</span>
+                </p>
+              )}
             </div>
           </div>
 
-          <div className="mb-8 text-center">
-            <p className="text-xs font-body text-academia-mutedForeground">
-              Need the correct format?{' '}
-              <button 
-                onClick={handleDownloadTemplate}
-                className="text-academia-accent hover:text-[#E8DFD4] underline transition-colors"
-              >
-                Download a blank CSV template
-              </button>
-            </p>
-          </div>
-
+          {/* STATUS LCD SCREEN */}
           {uploadStatus.message && (
-            <div className={`p-4 rounded mb-6 text-sm font-body border ${uploadStatus.type === 'success' ? 'bg-academia-accent/10 border-academia-accent text-academia-accent' : 'bg-academia-accentSecondary/10 border-academia-accentSecondary text-academia-accentSecondary'}`}>
-              {uploadStatus.message}
+            <div className={`${theme.recessed} p-4 flex items-center gap-3 border ${uploadStatus.type === 'success' ? 'border-[#2ed573]/50 bg-[#2ed573]/10' : 'border-[#ff4757]/50 bg-[#ff4757]/10'}`}>
+              {uploadStatus.type === 'success' ? <CheckCircle2 size={18} className="text-[#2ed573]" /> : <AlertTriangle size={18} className="text-[#ff4757]" />}
+              <span className={`font-mono text-[10px] font-black uppercase tracking-widest ${uploadStatus.type === 'success' ? 'text-[#157a3b]' : 'text-[#c0392b]'}`}>
+                {uploadStatus.message}
+              </span>
             </div>
           )}
 
-          <button 
-            onClick={handleSubmit}
-            disabled={isUploading || !file || !contributorName}
-            className={`w-full py-4 rounded font-display uppercase tracking-widest text-xs flex items-center justify-center gap-2 transition-all ${
-              isUploading || !file || !contributorName
-                ? 'bg-academia-bg border border-academia-border text-academia-mutedForeground cursor-not-allowed'
-                : 'bg-brass-gradient text-[#1C1714] font-bold hover:brightness-110 shadow-[0_4px_12px_rgba(0,0,0,0.3)]'
-            }`}
-          >
-            {isUploading ? 'Transmitting Data...' : <><UploadCloud size={16} /> Submit Dataset for Review</>}
-          </button>
+          {/* SUBMIT BUTTON */}
+          <div className="pt-2">
+            <button 
+              onClick={handleSubmit}
+              disabled={isUploading || !file || !contributorName}
+              className={`${theme.btnBase} ${theme.btnAccent} w-full !py-5`}
+            >
+              {isUploading ? (
+                <span className="flex items-center gap-2 animate-pulse"><Cpu size={18} className="animate-spin" /> Transmitting...</span>
+              ) : (
+                <span className="flex items-center gap-2"><UploadCloud size={18} /> Initialize Transfer</span>
+              )}
+            </button>
+          </div>
 
         </div>
       </main>
