@@ -1,0 +1,11 @@
+Use magic wand to get the total pixels of all same-colored pixels. (e.g. all the purple present)
+
+Use histogram to see total pixel count
+
+
+
+Formula:
+
+Flood Score = ((Phigh * 3) + (Pmedium * 2) + (Plow * 1) / Total Pixels)
+
+Base = ((0*3)+(0*2)+(0*1))/0
