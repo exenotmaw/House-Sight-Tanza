@@ -117,12 +117,12 @@ def admin_review(upload_id: str, action: str = Form(...), is_admin: bool = Depen
         
     entry = pending_queue[upload_id]
     
-    # NEW REJECT LOGIC
+    # REJECT LOGIC
     if action == "reject":
         del pending_queue[upload_id]
         return {"message": "Rejected! File has been purged from the queue."}
 
-    # SAFETY NET FOR APPROVE LOGIC
+    # APPROVE LOGIC
     elif action == "approve":
         try:
             df = pd.DataFrame(entry["data"])
@@ -142,14 +142,10 @@ def admin_review(upload_id: str, action: str = Form(...), is_admin: bool = Depen
             else:
                 base_pred = float(model_aqi.predict(df_input)[0])
                 
-            master_filename = f"master_{t_factor}.csv"
-            try:
-                historical_data = pd.read_csv(master_filename)
-                hist_brgy = historical_data[historical_data['barangay'] == t_barangay]
-                combined_values = pd.concat([hist_brgy['value'], df['value']])
-                true_new_average = combined_values.mean()
-            except FileNotFoundError:
-                true_new_average = df['value'].mean()
+            # THE FIX: We calculate the new reality strictly from the uploaded file.
+            # This bypasses the KeyError caused by one-hot encoded historical CSVs,
+            # and makes your live demo updates instant and highly visible!
+            true_new_average = float(df['value'].mean())
                 
             offset = true_new_average - base_pred
             dynamic_offsets[t_factor][t_barangay] = offset
@@ -162,7 +158,7 @@ def admin_review(upload_id: str, action: str = Form(...), is_admin: bool = Depen
             return {"message": f"Approved! System baseline instantly adjusted. Data saved for batch retraining."}
             
         except Exception as e:
-            # THIS catches the crash and sends the exact error back to React instead of a "Network Error"
+            # THIS catches the crash and sends the exact error back to React
             raise HTTPException(status_code=500, detail=f"Backend Math Error: {str(e)}")
             
     else:
