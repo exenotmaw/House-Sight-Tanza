@@ -92,27 +92,33 @@ def verify_admin(token: str = Depends(oauth2_scheme)):
 # =====================================================================
 # 4. ASYNCHRONOUS RETRAINING ENGINE (Runs in Background)
 # =====================================================================
-def background_retrain_task(factor_name: str, target_barangay: str):
-    """Quietly retrains the AI in the background without freezing the website."""
-    print(f"\n⚙️ [ASYNC TASK] Retraining {factor_name.upper()} model in background...")
+def background_sync_matrix(factor_name: str, target_barangay: str = None):
+    """Quietly rebuilds the AI from the pristine base + all current archive files."""
+    print(f"\n⚙️ [ASYNC TASK] Synchronizing {factor_name.upper()} Matrix...")
+    
+    # The system looks for the pristine base. If it doesn't exist, it locks the current master as the new base!
     master_csv = f"master_{factor_name}.csv"
+    base_csv = f"base_{factor_name}.csv"
     
     try:
-        # 1. Load Data
-        if not os.path.exists(master_csv):
-            print(f"❌ [ASYNC TASK] Master file {master_csv} missing. Aborting.")
+        if not os.path.exists(base_csv) and os.path.exists(master_csv):
+            shutil.copy(master_csv, base_csv)
+            print("🔒 Locked original data into a pristine Base file.")
+            
+        if not os.path.exists(base_csv):
+            print(f"❌ [ASYNC TASK] Base file {base_csv} missing. Aborting.")
             return
             
-        master_df = pd.read_csv(master_csv)
-        new_files = glob.glob(f"approved_datasets/*_{factor_name}_*.csv")
+        # 1. Start with the clean Base
+        combined_df = pd.read_csv(base_csv)
         
-        if not new_files:
-            return
-            
-        new_dfs = [pd.read_csv(f) for f in new_files]
-        combined_df = pd.concat([master_df] + new_dfs, ignore_index=True)
+        # 2. Add ONLY the files that currently exist in the archive
+        archive_files = glob.glob(f"archived_datasets/*_{factor_name}_*.csv")
+        if archive_files:
+            new_dfs = [pd.read_csv(f) for f in archive_files]
+            combined_df = pd.concat([combined_df] + new_dfs, ignore_index=True)
         
-        # 2. One-Hot Encode
+        # 3. One-Hot Encode Spatial Data
         for brgy in all_barangays:
             if brgy == 'Amaya': continue
             col_name = f"barangay_{brgy}"
@@ -121,36 +127,35 @@ def background_retrain_task(factor_name: str, target_barangay: str):
             elif col_name not in combined_df.columns:
                 combined_df[col_name] = 0
                 
-        # 3. Train Model
+        # 4. Train the Model
         feature_cols = ['year', 'proximity_km'] + spatial_cols
         X = combined_df[feature_cols]
         y = combined_df['value']
         
         X_train, X_test, y_train, y_test = train_test_split(X, y, test_size=0.2, random_state=42)
-        
         model = xgb.XGBRegressor(objective='reg:squarederror', n_estimators=100, learning_rate=0.1, max_depth=5)
         model.fit(X_train, y_train)
         
-        # 4. Save New Model
-        model_name = factor_name.split('_')[0] if "price" not in factor_name else "price" # Handles "air", "flood", "house_price" mapping
+        # 5. Save the New Model
+        model_name = factor_name.split('_')[0] if "price" not in factor_name else "price"
         if factor_name == "house_price": model_name = "price"
         elif factor_name == "flood_risk": model_name = "flood"
         else: model_name = "aqi"
         
         model_path = os.path.join("models", f"model_{model_name}.json")
         model.save_model(model_path)
-        
-        # 5. Archive files & Update Master
-        combined_df.to_csv(master_csv, index=False)
-        for f in new_files:
-            shutil.move(f, os.path.join("archived_datasets", os.path.basename(f)))
             
-        # 6. LIVE RELOAD: Reload RAM and wipe the temporary offset!
+        # 6. LIVE RELOAD RAM!
         global dynamic_offsets
         load_all_models()
-        dynamic_offsets[factor_name][target_barangay] = 0
+        if target_barangay:
+            dynamic_offsets[factor_name][target_barangay] = 0
+        else:
+            # If no target provided (e.g. during a delete), wipe all offsets for this factor to reset perfectly
+            for brgy in dynamic_offsets[factor_name]:
+                dynamic_offsets[factor_name][brgy] = 0
         
-        print(f"✅ [ASYNC TASK] Retraining Complete! AI Brain Updated.")
+        print(f"✅ [ASYNC TASK] Synchronization Complete! AI Brain Healed.")
         
     except Exception as e:
         print(f"❌ [ASYNC TASK FAILED]: {str(e)}")
@@ -231,7 +236,7 @@ def admin_review(upload_id: str, background_tasks: BackgroundTasks, action: str 
 
             # 🔥 THE MAGIC: We tell FastAPI to start retraining the model in the background
             # while instantly sending the success message back to the user's browser!
-            background_tasks.add_task(background_retrain_task, t_factor, t_barangay)
+            background_tasks.add_task(background_sync_matrix, t_factor, t_barangay)
             
             return {"message": f"Approved! UI updated instantly. AI is retraining in the background."}
             
@@ -264,24 +269,28 @@ def get_approved_files(is_admin: bool = Depends(verify_admin)):
     return files
 
 @app.delete("/admin/approved-files/{filename}")
-def delete_approved_file(filename: str, is_admin: bool = Depends(verify_admin)):
-    # 1. Point the scanner to the Archive where the merged files now live
+def delete_approved_file(filename: str, background_tasks: BackgroundTasks, is_admin: bool = Depends(verify_admin)):
     file_path = os.path.join("archived_datasets", filename)
     
-    # 2. Fallback: Check if it's currently in the middle of background training
     if not os.path.exists(file_path):
         file_path = os.path.join("approved_datasets", filename)
         
-    # 3. If it doesn't exist in either place, throw a 404
     if not os.path.exists(file_path):
         raise HTTPException(status_code=404, detail="File not found in Matrix Memory.")
         
     try:
-        # 4. Physically delete the file from the hard drive
+        # 1. Delete the corrupted file
         os.remove(file_path)
         
-        # 5. Tell React it worked so the UI removes it from the screen
-        return {"message": "Purge Protocol Engaged. File permanently deleted from Matrix Memory logs."}
+        # 2. Identify which AI model needs to be healed based on the filename
+        if "house_price" in filename: factor = "house_price"
+        elif "flood_risk" in filename: factor = "flood_risk"
+        else: factor = "air_quality"
+        
+        # 3. Trigger the Auto-Healing Background Task!
+        background_tasks.add_task(background_sync_matrix, factor)
+        
+        return {"message": "Purge Protocol Engaged. File deleted and AI is healing in the background."}
         
     except Exception as e:
         raise HTTPException(status_code=500, detail=str(e))
