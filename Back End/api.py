@@ -62,8 +62,8 @@ os.makedirs("approved_datasets", exist_ok=True)
 # =====================================================================
 oauth2_scheme = OAuth2PasswordBearer(tokenUrl="/admin/login")
 
-ADMIN_USER = "housesightadmin"
-ADMIN_PASS = "housesightpassword"
+ADMIN_USER = os.getenv("ADMIN_USER", "housesightadmin")
+ADMIN_PASS = os.getenv("ADMIN_PASS", "housesightpassword")
 
 @app.post("/admin/login")
 def login(form_data: OAuth2PasswordRequestForm = Depends()):
