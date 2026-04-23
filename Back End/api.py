@@ -242,7 +242,26 @@ def admin_review(upload_id: str, background_tasks: BackgroundTasks, action: str 
 
 @app.get("/admin/approved-files")
 def get_approved_files(is_admin: bool = Depends(verify_admin)):
-    return [] # We can return an empty list or read from archived_datasets now, as approved files are instantly merged.
+    files = []
+    
+    # Scan both directories: 'approved' (currently training) and 'archived' (finished training)
+    for directory in ["approved_datasets", "archived_datasets"]:
+        if os.path.exists(directory):
+            for filename in os.listdir(directory):
+                if filename.endswith(".csv"):
+                    parts = filename.replace('.csv', '').split('_')
+                    if len(parts) >= 4:
+                        files.append({
+                            "filename": filename,
+                            "timestamp": parts[0] + "_" + parts[1],
+                            "factor": parts[2] if len(parts) == 4 else parts[2] + "_" + parts[3], 
+                            "barangay": parts[-1]
+                        })
+    
+    # Sort by timestamp, newest files at the top
+    files.sort(key=lambda x: x["timestamp"], reverse=True)
+    
+    return files
 
 @app.delete("/admin/approved-files/{filename}")
 def delete_approved_file(filename: str, is_admin: bool = Depends(verify_admin)):
