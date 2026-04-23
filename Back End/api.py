@@ -3,7 +3,6 @@ from fastapi.middleware.cors import CORSMiddleware
 from fastapi.security import OAuth2PasswordBearer, OAuth2PasswordRequestForm
 from pydantic import BaseModel, Field
 from sklearn.model_selection import train_test_split
-from sklearn.metrics import mean_squared_error, r2_score
 import pandas as pd
 import xgboost as xgb
 import io
@@ -52,29 +51,22 @@ def load_all_models():
     """Loads or reloads the AI models into live RAM."""
     global model_aqi, model_flood, model_price
     try:
-        model_aqi.load_model("models/model_aqi.json")
-        model_flood.load_model("models/model_flood.json")
-        model_price.load_model("models/model_price.json")
+        if os.path.exists("models/model_aqi.json"): model_aqi.load_model("models/model_aqi.json")
+        if os.path.exists("models/model_flood.json"): model_flood.load_model("models/model_flood.json")
+        if os.path.exists("models/model_price.json"): model_price.load_model("models/model_price.json")
         print("✅ Models loaded into live RAM successfully!")
     except Exception as e:
         print(f"⚠️ WARNING: Could not load models: {e}")
 
 load_all_models()
 
-# MLOps State
 pending_queue = {}
 dynamic_offsets = {"house_price": {}, "flood_risk": {}, "air_quality": {}}
 
-# Ensure directories exist
-os.makedirs("approved_datasets", exist_ok=True)
-os.makedirs("archived_datasets", exist_ok=True)
-os.makedirs("models", exist_ok=True)
+for folder in ["approved_datasets", "archived_datasets", "models"]:
+    os.makedirs(folder, exist_ok=True)
 
-# =====================================================================
-# 3. AUTHENTICATION LAYER
-# =====================================================================
 oauth2_scheme = OAuth2PasswordBearer(tokenUrl="/admin/login")
-
 ADMIN_USER = os.getenv("ADMIN_USER", "housesightadmin")
 ADMIN_PASS = os.getenv("ADMIN_PASS", "housesightpassword")
 
@@ -86,17 +78,14 @@ def login(form_data: OAuth2PasswordRequestForm = Depends()):
 
 def verify_admin(token: str = Depends(oauth2_scheme)):
     if token != "housesight_secure_admin_token_2026":
-        raise HTTPException(status_code=401, detail="Unauthorized Action. Invalid Token.")
+        raise HTTPException(status_code=401, detail="Unauthorized Action.")
     return True
 
 # =====================================================================
-# 4. ASYNCHRONOUS RETRAINING ENGINE (Runs in Background)
+# 3. ASYNCHRONOUS RETRAINING ENGINE (Runs in Background)
 # =====================================================================
 def background_sync_matrix(factor_name: str, target_barangay: str = None):
-    """Quietly rebuilds the AI from the pristine base + all current archive files."""
     print(f"\n⚙️ [ASYNC TASK] Synchronizing {factor_name.upper()} Matrix...")
-    
-    # The system looks for the pristine base. If it doesn't exist, it locks the current master as the new base!
     master_csv = f"master_{factor_name}.csv"
     base_csv = f"base_{factor_name}.csv"
     
@@ -105,64 +94,59 @@ def background_sync_matrix(factor_name: str, target_barangay: str = None):
             shutil.copy(master_csv, base_csv)
             print("🔒 Locked original data into a pristine Base file.")
             
-        if not os.path.exists(base_csv):
-            print(f"❌ [ASYNC TASK] Base file {base_csv} missing. Aborting.")
-            return
+        if not os.path.exists(base_csv): return
             
-        # 1. Start with the clean Base
         combined_df = pd.read_csv(base_csv)
-        
-        # 2. Add ONLY the files that currently exist in the archive
         archive_files = glob.glob(f"archived_datasets/*_{factor_name}_*.csv")
+        
         if archive_files:
             new_dfs = [pd.read_csv(f) for f in archive_files]
             combined_df = pd.concat([combined_df] + new_dfs, ignore_index=True)
         
-        # 3. One-Hot Encode Spatial Data
+        # 🔥 AUTO-MAPPER FIX: Lowercase all columns to prevent case-sensitive crashes
+        combined_df.columns = [col.lower().strip() for col in combined_df.columns]
+        
+        # 🔥 AUTO-MAPPER FIX: Translate user columns into AI 'value' columns
+        rename_map = {'price_php': 'value', 'flood_risk': 'value', 'aqi': 'value'}
+        combined_df = combined_df.rename(columns=rename_map)
+        
+        # 🔥 AUTO-MAPPER FIX: Inject missing proximity_km for Flood and AQI files!
+        if 'proximity_km' not in combined_df.columns and 'barangay' in combined_df.columns:
+            combined_df['proximity_km'] = combined_df['barangay'].map(proximity_map)
+            
+        # One-Hot Encode Spatial Data
         for brgy in all_barangays:
             if brgy == 'Amaya': continue
             col_name = f"barangay_{brgy}"
-            if 'barangay' in combined_df.columns:
-                combined_df[col_name] = (combined_df['barangay'] == brgy).astype(int)
-            elif col_name not in combined_df.columns:
-                combined_df[col_name] = 0
+            combined_df[col_name] = (combined_df['barangay'] == brgy).astype(int) if 'barangay' in combined_df.columns else 0
                 
-        # 4. Train the Model
-        feature_cols = ['year', 'proximity_km'] + spatial_cols
-        X = combined_df[feature_cols]
+        # Train Model
+        X = combined_df[features]
         y = combined_df['value']
         
         X_train, X_test, y_train, y_test = train_test_split(X, y, test_size=0.2, random_state=42)
-        model = xgb.XGBRegressor(objective='reg:squarederror', n_estimators=100, learning_rate=0.1, max_depth=5)
+        model = xgb.XGBRegressor(objective='reg:squarederror', n_estimators=120, learning_rate=0.05, max_depth=5)
         model.fit(X_train, y_train)
         
-        # 5. Save the New Model
-        model_name = factor_name.split('_')[0] if "price" not in factor_name else "price"
-        if factor_name == "house_price": model_name = "price"
-        elif factor_name == "flood_risk": model_name = "flood"
-        else: model_name = "aqi"
+        # Re-capitalize columns before saving the snapshot so it looks nice for the admin
+        export_df = combined_df.rename(columns={'value': factor_name.replace('house_', '').capitalize()})
+        export_df.to_csv(master_csv, index=False)
         
-        model_path = os.path.join("models", f"model_{model_name}.json")
-        model.save_model(model_path)
+        model_name = "price" if "price" in factor_name else ("flood" if "flood" in factor_name else "aqi")
+        model.save_model(os.path.join("models", f"model_{model_name}.json"))
             
-        # 6. LIVE RELOAD RAM!
         global dynamic_offsets
         load_all_models()
-        if target_barangay:
-            dynamic_offsets[factor_name][target_barangay] = 0
-        else:
-            # If no target provided (e.g. during a delete), wipe all offsets for this factor to reset perfectly
-            for brgy in dynamic_offsets[factor_name]:
-                dynamic_offsets[factor_name][brgy] = 0
+        if target_barangay: dynamic_offsets[factor_name][target_barangay] = 0
+        else: dynamic_offsets[factor_name] = {b: 0 for b in all_barangays}
         
-        print(f"✅ [ASYNC TASK] Synchronization Complete! AI Brain Healed.")
+        print(f"✅ AI Brain Healed!")
         
     except Exception as e:
         print(f"❌ [ASYNC TASK FAILED]: {str(e)}")
 
-
 # =====================================================================
-# 5. DATA INGESTION & ADMIN ENDPOINTS
+# 4. DATA INGESTION & ADMIN ENDPOINTS
 # =====================================================================
 
 @app.post("/public/submit-csv")
@@ -173,145 +157,98 @@ async def public_submit_csv(
     try:
         contents = await file.read()
         df = pd.read_csv(io.BytesIO(contents))
+        
+        # Format columns safely before it enters the queue
+        df.columns = [col.lower().strip() for col in df.columns]
+        df = df.rename(columns={'price_php': 'value', 'flood_risk': 'value', 'aqi': 'value'})
+        
         if df.empty or 'value' not in df.columns:
-            raise HTTPException(status_code=400, detail="CSV must contain a 'value' column.")
+            raise HTTPException(status_code=400, detail="CSV must contain a valid target column (Price_PHP, AQI, Flood_Risk, or value).")
             
         upload_id = str(uuid.uuid4())
         pending_queue[upload_id] = {
             "id": upload_id, "barangay": barangay, "factor": factor,
             "contributor": contributor_name, "filename": file.filename,
-            "status": "Pending Review", "data": df.to_dict() 
+            "data": df.to_dict() 
         }
-        return {"status": "success", "message": "File submitted to Admin for review!"}
+        return {"status": "success"}
     except Exception as e:
         raise HTTPException(status_code=500, detail=str(e))
 
 @app.get("/admin/queue")
 def get_pending_queue(is_admin: bool = Depends(verify_admin)):
-    return [
-        {"id": k, "barangay": v["barangay"], "factor": v["factor"], 
-         "contributor": v["contributor"], "filename": v["filename"]} 
-        for k, v in pending_queue.items()
-    ]
+    return [{"id": k, "barangay": v["barangay"], "factor": v["factor"], "contributor": v["contributor"], "filename": v["filename"]} for k, v in pending_queue.items()]
 
 @app.post("/admin/review/{upload_id}")
 def admin_review(upload_id: str, background_tasks: BackgroundTasks, action: str = Form(...), is_admin: bool = Depends(verify_admin)):
-    if upload_id not in pending_queue:
-        raise HTTPException(status_code=404, detail="Upload not found.")
+    if upload_id not in pending_queue: raise HTTPException(status_code=404)
         
     entry = pending_queue[upload_id]
-    
     if action == "reject":
         del pending_queue[upload_id]
-        return {"message": "Rejected! File has been purged from the queue."}
+        return {"message": "Rejected"}
 
     elif action == "approve":
         try:
             df = pd.DataFrame(entry["data"])
-            t_factor = entry["factor"]
-            t_barangay = entry["barangay"]
+            t_factor, t_barangay = entry["factor"], entry["barangay"]
             
             prox = proximity_map.get(t_barangay, 5.0)
             input_base = {'year': 2025, 'proximity_km': prox}
-            for col in spatial_cols:
-                input_base[col] = 1 if f"barangay_{t_barangay}" == col else 0
+            for col in spatial_cols: input_base[col] = 1 if f"barangay_{t_barangay}" == col else 0
             df_input = pd.DataFrame([input_base])[features]
             
-            if t_factor == "house_price": base_pred = float(model_price.predict(df_input)[0])
-            elif t_factor == "flood_risk": base_pred = float(model_flood.predict(df_input)[0])
-            else: base_pred = float(model_aqi.predict(df_input)[0])
+            model_target = model_price if t_factor == "house_price" else (model_flood if t_factor == "flood_risk" else model_aqi)
+            base_pred = float(model_target.predict(df_input)[0])
                 
             uploaded_avg = float(df['value'].mean())
-            LEARNING_RATE = 0.5 
-            merged_value = (base_pred * (1.0 - LEARNING_RATE)) + (uploaded_avg * LEARNING_RATE)
-                
-            offset = merged_value - base_pred
-            current_offset = dynamic_offsets[t_factor].get(t_barangay, 0)
-            dynamic_offsets[t_factor][t_barangay] = current_offset + offset
+            offset = ((base_pred * 0.5) + (uploaded_avg * 0.5)) - base_pred
+            dynamic_offsets[t_factor][t_barangay] = dynamic_offsets[t_factor].get(t_barangay, 0) + offset
             
-            timestamp = datetime.datetime.now().strftime("%Y%m%d_%H%M%S")
-            filename = f"approved_datasets/{timestamp}_{t_factor}_{t_barangay.replace(' ', '')}.csv"
+            filename = f"archived_datasets/{datetime.datetime.now().strftime('%Y%m%d_%H%M%S')}_{t_factor}_{t_barangay.replace(' ', '')}.csv"
             df.to_csv(filename, index=False)
             del pending_queue[upload_id]
 
-            # 🔥 THE MAGIC: We tell FastAPI to start retraining the model in the background
-            # while instantly sending the success message back to the user's browser!
             background_tasks.add_task(background_sync_matrix, t_factor, t_barangay)
-            
-            return {"message": f"Approved! UI updated instantly. AI is retraining in the background."}
-            
+            return {"message": "Approved. AI is retraining."}
         except Exception as e:
-            raise HTTPException(status_code=500, detail=f"Backend Math Error: {str(e)}")
-    else:
-        raise HTTPException(status_code=400, detail="Invalid action parameter.")
+            raise HTTPException(status_code=500, detail=str(e))
 
 @app.get("/admin/approved-files")
 def get_approved_files(is_admin: bool = Depends(verify_admin)):
     files = []
-    
-    # Scan both directories: 'approved' (currently training) and 'archived' (finished training)
-    for directory in ["approved_datasets", "archived_datasets"]:
-        if os.path.exists(directory):
-            for filename in os.listdir(directory):
-                if filename.endswith(".csv"):
-                    parts = filename.replace('.csv', '').split('_')
-                    if len(parts) >= 4:
-                        files.append({
-                            "filename": filename,
-                            "timestamp": parts[0] + "_" + parts[1],
-                            "factor": parts[2] if len(parts) == 4 else parts[2] + "_" + parts[3], 
-                            "barangay": parts[-1]
-                        })
-    
-    # Sort by timestamp, newest files at the top
+    for d in ["approved_datasets", "archived_datasets"]:
+        if os.path.exists(d):
+            for f in os.listdir(d):
+                if f.endswith(".csv"):
+                    p = f.replace('.csv', '').split('_')
+                    if len(p) >= 4: files.append({"filename": f, "timestamp": f"{p[0]}_{p[1]}", "factor": p[2] if len(p)==4 else f"{p[2]}_{p[3]}", "barangay": p[-1]})
     files.sort(key=lambda x: x["timestamp"], reverse=True)
-    
     return files
 
 @app.delete("/admin/approved-files/{filename}")
 def delete_approved_file(filename: str, background_tasks: BackgroundTasks, is_admin: bool = Depends(verify_admin)):
     file_path = os.path.join("archived_datasets", filename)
-    
-    if not os.path.exists(file_path):
-        file_path = os.path.join("approved_datasets", filename)
+    if not os.path.exists(file_path): file_path = os.path.join("approved_datasets", filename)
+    if not os.path.exists(file_path): raise HTTPException(status_code=404)
         
-    if not os.path.exists(file_path):
-        raise HTTPException(status_code=404, detail="File not found in Matrix Memory.")
-        
-    try:
-        # 1. Delete the corrupted file
-        os.remove(file_path)
-        
-        # 2. Identify which AI model needs to be healed based on the filename
-        if "house_price" in filename: factor = "house_price"
-        elif "flood_risk" in filename: factor = "flood_risk"
-        else: factor = "air_quality"
-        
-        # 3. Trigger the Auto-Healing Background Task!
-        background_tasks.add_task(background_sync_matrix, factor)
-        
-        return {"message": "Purge Protocol Engaged. File deleted and AI is healing in the background."}
-        
-    except Exception as e:
-        raise HTTPException(status_code=500, detail=str(e))
+    os.remove(file_path)
+    factor = "house_price" if "house_price" in filename else ("flood_risk" if "flood_risk" in filename else "air_quality")
+    background_tasks.add_task(background_sync_matrix, factor)
+    return {"message": "Deleted. Healing brain..."}
     
 @app.get("/admin/queue/{upload_id}/data")
 def get_pending_data(upload_id: str, is_admin: bool = Depends(verify_admin)):
-    if upload_id not in pending_queue:
-        raise HTTPException(status_code=404, detail="Upload not found.")
-    df = pd.DataFrame(pending_queue[upload_id]["data"])
-    return df.to_dict(orient="records")
+    if upload_id not in pending_queue: raise HTTPException(status_code=404)
+    return pd.DataFrame(pending_queue[upload_id]["data"]).to_dict(orient="records")
 
 @app.get("/admin/approved-files/{filename}/data")
 def get_approved_data(filename: str, is_admin: bool = Depends(verify_admin)):
-    file_path = os.path.join("archived_datasets", filename) # Redirected to archive
-    if not os.path.exists(file_path):
-        raise HTTPException(status_code=404, detail="File not found.")
-    df = pd.read_csv(file_path)
-    return df.to_dict(orient="records")
+    if not os.path.exists(os.path.join("archived_datasets", filename)): raise HTTPException(status_code=404)
+    return pd.read_csv(os.path.join("archived_datasets", filename)).to_dict(orient="records")
 
 # =====================================================================
-# 6. PREDICTION ENDPOINTS (STUDIO & ANALYSIS)
+# 5. PREDICTION & ANALYSIS ENDPOINTS
 # =====================================================================
 
 class RecommendRequest(BaseModel):
@@ -325,163 +262,89 @@ class AnalyzeRequest(BaseModel):
     barangay: str = Field(min_length=2, max_length=50)
 
 @app.post("/recommend")
-def get_recommendations(request: RecommendRequest):
-    target_year = 2025 + request.years 
-    xgboost_year = min(target_year, 2025)
-    years_into_future = max(0, target_year - 2025)
-    
-    all_predictions = []
+def get_recommendations(req: RecommendRequest):
+    tgt_year = min(2025 + req.years, 2025)
+    f_years = max(0, (2025 + req.years) - 2025)
+    preds = []
     
     for brgy, prox in proximity_map.items():
-        input_base = {'year': xgboost_year, 'proximity_km': prox}
-        for col in spatial_cols:
-            input_base[col] = 1 if f"barangay_{brgy}" == col else 0
-            
-        df_input = pd.DataFrame([input_base])[features]
+        base = {'year': tgt_year, 'proximity_km': prox}
+        for col in spatial_cols: base[col] = 1 if f"barangay_{brgy}" == col else 0
+        df_in = pd.DataFrame([base])[features]
         
-        base_aqi = float(model_aqi.predict(df_input)[0])
-        base_flood = float(model_flood.predict(df_input)[0])
-        base_price = float(model_price.predict(df_input)[0])
+        p_aqi = max(0.0, float(model_aqi.predict(df_in)[0]) + dynamic_offsets["air_quality"].get(brgy, 0)) + (f_years * 0.5)
+        p_flood = max(0.0, float(model_flood.predict(df_in)[0]) + dynamic_offsets["flood_risk"].get(brgy, 0)) + (f_years * 0.02)
+        p_price = max(100000.0, float(model_price.predict(df_in)[0]) + dynamic_offsets["house_price"].get(brgy, 0)) * ((1.06) ** f_years)
         
-        base_aqi += dynamic_offsets["air_quality"].get(brgy, 0)
-        base_flood += dynamic_offsets["flood_risk"].get(brgy, 0)
-        base_price += dynamic_offsets["house_price"].get(brgy, 0)
+        preds.append({"barangay": brgy, "raw_aqi": p_aqi, "raw_flood": p_flood, "raw_price": p_price, "raw_prox": prox})
         
-        base_aqi = max(0.0, base_aqi)
-        base_flood = max(0.0, base_flood)
-        base_price = max(100000.0, base_price)
-        
-        p_aqi = base_aqi + (years_into_future * 0.5)
-        p_flood = base_flood + (years_into_future * 0.02)
-        p_price = base_price * ((1 + 0.06) ** years_into_future)
-        
-        all_predictions.append({
-            "barangay": brgy, "raw_aqi": float(p_aqi), "raw_flood": float(p_flood), 
-            "raw_price": float(p_price), "raw_prox": float(prox)
-        })
-        
-    min_price = min(p['raw_price'] for p in all_predictions)
-    max_price = max(p['raw_price'] for p in all_predictions)
-    min_flood = min(p['raw_flood'] for p in all_predictions)
-    max_flood = max(p['raw_flood'] for p in all_predictions)
-    min_aqi = min(p['raw_aqi'] for p in all_predictions)
-    max_aqi = max(p['raw_aqi'] for p in all_predictions)
-    min_prox = min(p['raw_prox'] for p in all_predictions)
-    max_prox = max(p['raw_prox'] for p in all_predictions)
-
     results = []
-    
-    for row in all_predictions:
-        v_price = ((row['raw_price'] - min_price) / (max_price - min_price) * 100.0) if max_price != min_price else 50.0
-        v_flood = ((row['raw_flood'] - min_flood) / (max_flood - min_flood) * 100.0) if max_flood != min_flood else 50.0
-        v_aqi = ((row['raw_aqi'] - min_aqi) / (max_aqi - min_aqi) * 100.0) if max_aqi != min_aqi else 50.0
-        v_prox = ((row['raw_prox'] - min_prox) / (max_prox - min_prox) * 100.0) if max_prox != min_prox else 50.0
+    # Normalization code remains the same...
+    min_price, max_price = min(p['raw_price'] for p in preds), max(p['raw_price'] for p in preds)
+    min_flood, max_flood = min(p['raw_flood'] for p in preds), max(p['raw_flood'] for p in preds)
+    min_aqi, max_aqi = min(p['raw_aqi'] for p in preds), max(p['raw_aqi'] for p in preds)
+    min_prox, max_prox = min(p['raw_prox'] for p in preds), max(p['raw_prox'] for p in preds)
 
-        def get_target_match(slider_val, current_val):
-            if slider_val == -1: return None 
-            return 100.0 - abs(slider_val - current_val)
+    for r in preds:
+        v_p = ((r['raw_price'] - min_price)/(max_price - min_price)*100) if max_price!=min_price else 50
+        v_f = ((r['raw_flood'] - min_flood)/(max_flood - min_flood)*100) if max_flood!=min_flood else 50
+        v_a = ((r['raw_aqi'] - min_aqi)/(max_aqi - min_aqi)*100) if max_aqi!=min_aqi else 50
+        v_pr = ((r['raw_prox'] - min_prox)/(max_prox - min_prox)*100) if max_prox!=min_prox else 50
 
         matches = []
-        if request.house_price != -1: matches.append(get_target_match(request.house_price, v_price))
-        if request.flood_risk != -1: matches.append(get_target_match(request.flood_risk, v_flood))
-        if request.air_quality != -1: matches.append(get_target_match(request.air_quality, v_aqi))
-        if request.proximity != -1: matches.append(get_target_match(request.proximity, v_prox))
+        if req.house_price != -1: matches.append(100 - abs(req.house_price - v_p))
+        if req.flood_risk != -1: matches.append(100 - abs(req.flood_risk - v_f))
+        if req.air_quality != -1: matches.append(100 - abs(req.air_quality - v_a))
+        if req.proximity != -1: matches.append(100 - abs(req.proximity - v_pr))
 
-        exact_match = sum(matches) / len(matches) if matches else 0.0
-
-        flood_score = max(0.0, min(100.0, 100.0 - ((row['raw_flood'] / 5.0) * 100.0)))
-        aqi_score = max(0.0, min(100.0, 100.0 - ((row['raw_aqi'] / 150.0) * 100.0)))
-        prox_score = max(0.0, min(100.0, 100.0 - (row['raw_prox'] * 10.0)))
-        
-        price_ratio = (row['raw_price'] - GLOBAL_MIN_PRICE) / (GLOBAL_MAX_PRICE - GLOBAL_MIN_PRICE)
-        price_score = max(0.0, min(100.0, 100.0 - (price_ratio * 100.0)))
-        
-        model_value = round((price_score * 0.40) + (flood_score * 0.25) + (prox_score * 0.20) + (aqi_score * 0.15))
+        em = sum(matches)/len(matches) if matches else 0.0
+        mv = round(
+            max(0, 100 - (r['raw_price']/GLOBAL_MAX_PRICE)*100)*0.4 +
+            max(0, 100 - (r['raw_flood']/5)*100)*0.25 +
+            max(0, 100 - (r['raw_prox']*10))*0.20 +
+            max(0, 100 - (r['raw_aqi']/150)*100)*0.15
+        )
         
         results.append({
-            "id": str(row['barangay'].lower().replace(" ", "-")),
-            "name": str(row['barangay']), 
-            "exact_match": float(exact_match),                
-            "match": int(round(exact_match)), 
-            "model_value": int(model_value),         
-            "price": f"₱{row['raw_price']:,.0f}",
-            "raw_aqi": float(round(row['raw_aqi'], 1)),     
-            "raw_flood": float(round(row['raw_flood'], 2)), 
-            "raw_prox": float(row['raw_prox'])
+            "id": r['barangay'].lower().replace(" ", "-"), "name": r['barangay'], "exact_match": em,
+            "match": int(round(em)), "model_value": mv, "price": f"₱{r['raw_price']:,.0f}",
+            "raw_aqi": round(r['raw_aqi'], 1), "raw_flood": round(r['raw_flood'], 2), "raw_prox": r['raw_prox']
         })
-        
     results.sort(key=lambda x: x['exact_match'], reverse=True)
     return results
 
 @app.post("/analyze")
-def analyze_barangay(request: AnalyzeRequest):
-    target_barangay = request.barangay
-    if target_barangay not in proximity_map:
-        raise HTTPException(status_code=404, detail="Barangay not found.")
+def analyze_barangay(req: AnalyzeRequest):
+    brgy = req.barangay
+    if brgy not in proximity_map: raise HTTPException(status_code=404)
 
-    timeframes = [0, 5, 10, 15, 20]
-    prox = proximity_map.get(target_barangay, 5.0)
-    current_year = 2025 
+    prox = proximity_map.get(brgy, 5.0)
+    preds = []
     
-    predictions_list = []
-
-    for offset in timeframes:
-        target_year = current_year + offset
-        xgboost_year = min(target_year, 2025)
-        years_into_future = max(0, target_year - 2025)
+    for offset in [0, 5, 10, 15, 20]:
+        tgt = 2025 + offset
+        xg_yr, fut_yr = min(tgt, 2025), max(0, tgt - 2025)
         
-        input_base = {'year': xgboost_year, 'proximity_km': prox}
-        for col in spatial_cols:
-            input_base[col] = 1 if f"barangay_{target_barangay}" == col else 0
-            
-        df_input = pd.DataFrame([input_base])[features]
+        base = {'year': xg_yr, 'proximity_km': prox}
+        for col in spatial_cols: base[col] = 1 if f"barangay_{brgy}" == col else 0
+        df_in = pd.DataFrame([base])[features]
         
-        base_aqi = float(model_aqi.predict(df_input)[0])
-        base_flood = float(model_flood.predict(df_input)[0])
-        base_price = float(model_price.predict(df_input)[0])
+        aqi = max(0.0, float(model_aqi.predict(df_in)[0]) + dynamic_offsets["air_quality"].get(brgy, 0)) + (fut_yr * 0.5)
+        flood = max(0.0, float(model_flood.predict(df_in)[0]) + dynamic_offsets["flood_risk"].get(brgy, 0)) + (fut_yr * 0.02)
+        price = max(100000.0, float(model_price.predict(df_in)[0]) + dynamic_offsets["house_price"].get(brgy, 0)) * ((1.06) ** fut_yr)
         
-        base_aqi += dynamic_offsets["air_quality"].get(target_barangay, 0)
-        base_flood += dynamic_offsets["flood_risk"].get(target_barangay, 0)
-        base_price += dynamic_offsets["house_price"].get(target_barangay, 0)
+        fs = max(0, 100 - (flood/5)*100)
+        as_ = max(0, 100 - (aqi/150)*100)
+        ps = max(0, 100 - ((price-GLOBAL_MIN_PRICE)/(GLOBAL_MAX_PRICE-GLOBAL_MIN_PRICE))*100)
         
-        base_aqi = max(0.0, base_aqi)
-        base_flood = max(0.0, base_flood)
-        base_price = max(100000.0, base_price)
-        
-        p_aqi = base_aqi + (years_into_future * 0.5)
-        p_flood = base_flood + (years_into_future * 0.02)
-        p_price = base_price * ((1 + 0.06) ** years_into_future)
-        
-        predictions_list.append({
-            "Timeline": "Current" if offset == 0 else f"+{offset} Years",
-            "AQI": p_aqi, "Flood": p_flood, "Predicted Price": p_price
+        preds.append({
+            "year": "Current" if offset==0 else f"+{offset} Years", 
+            "model_value": round(ps*0.4 + fs*0.25 + max(0, 100-(prox*10))*0.2 + as_*0.15),
+            "flood_score": round(fs), "aqi_score": round(as_), "price_score": round(ps),
+            "raw_price": price, "raw_aqi": aqi, "raw_flood": flood, "raw_prox": prox
         })
 
-    predictions_df = pd.DataFrame(predictions_list)
-    frontend_response = []
-
-    for index, row in predictions_df.iterrows():
-        raw_price = row['Predicted Price']
-        raw_flood = row['Flood']
-        raw_aqi = row['AQI']
-        
-        flood_score = max(0.0, min(100.0, 100.0 - ((raw_flood / 5.0) * 100.0)))
-        aqi_score = max(0.0, min(100.0, 100.0 - ((raw_aqi / 150.0) * 100.0)))
-        prox_score = max(0.0, min(100.0, 100.0 - (prox * 10.0)))
-        
-        price_ratio = (raw_price - GLOBAL_MIN_PRICE) / (GLOBAL_MAX_PRICE - GLOBAL_MIN_PRICE)
-        price_score = max(0.0, min(100.0, 100.0 - (price_ratio * 100.0)))
-        
-        model_value = round((price_score * 0.40) + (flood_score * 0.25) + (prox_score * 0.20) + (aqi_score * 0.15))
-
-        frontend_response.append({
-            "year": row['Timeline'], "model_value": model_value,
-            "flood_score": round(flood_score), "aqi_score": round(aqi_score),
-            "price_score": round(price_score), "raw_price": raw_price,
-            "raw_aqi": raw_aqi, "raw_flood": raw_flood, "raw_prox": prox
-        })
-
-    return {"barangay": target_barangay, "future_projections": frontend_response}
+    return {"barangay": brgy, "future_projections": preds}
 
 if __name__ == "__main__":
     import uvicorn
