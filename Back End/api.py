@@ -193,24 +193,20 @@ def admin_review(upload_id: str, background_tasks: BackgroundTasks, action: str 
             df = pd.DataFrame(entry["data"])
             t_factor, t_barangay = entry["factor"], entry["barangay"]
             
-            prox = proximity_map.get(t_barangay, 5.0)
-            input_base = {'year': 2025, 'proximity_km': prox}
-            for col in spatial_cols: input_base[col] = 1 if f"barangay_{t_barangay}" == col else 0
-            df_input = pd.DataFrame([input_base])[features]
-            
-            model_target = model_price if t_factor == "house_price" else (model_flood if t_factor == "flood_risk" else model_aqi)
-            base_pred = float(model_target.predict(df_input)[0])
-                
-            uploaded_avg = float(df['value'].mean())
-            offset = ((base_pred * 0.5) + (uploaded_avg * 0.5)) - base_pred
-            dynamic_offsets[t_factor][t_barangay] = dynamic_offsets[t_factor].get(t_barangay, 0) + offset
-            
-            filename = f"archived_datasets/{datetime.datetime.now().strftime('%Y%m%d_%H%M%S')}_{t_factor}_{t_barangay.replace(' ', '')}.csv"
+            # 1. We completely deleted the fake 50/50 offset math here. 
+            # 2. Save the approved data directly to the vault.
+            timestamp = datetime.datetime.now().strftime('%Y%m%d_%H%M%S')
+            filename = f"archived_datasets/{timestamp}_{t_factor}_{t_barangay.replace(' ', '')}.csv"
             df.to_csv(filename, index=False)
+            
+            # 3. Clear it from the pending queue
             del pending_queue[upload_id]
 
+            # 4. Tell the pure AI to wake up and read the new data!
             background_tasks.add_task(background_sync_matrix, t_factor, t_barangay)
-            return {"message": "Approved. AI is retraining."}
+            
+            return {"message": "Approved. The pure AI is now evaluating the new data in the background."}
+            
         except Exception as e:
             raise HTTPException(status_code=500, detail=str(e))
 
@@ -263,23 +259,24 @@ class AnalyzeRequest(BaseModel):
 
 @app.post("/recommend")
 def get_recommendations(req: RecommendRequest):
-    tgt_year = min(2025 + req.years, 2025)
-    f_years = max(0, (2025 + req.years) - 2025)
+    # PURE AI: We pass the EXACT future year to XGBoost. No handcuffs.
+    target_year = 2025 + req.years 
     preds = []
     
     for brgy, prox in proximity_map.items():
-        base = {'year': tgt_year, 'proximity_km': prox}
+        base = {'year': target_year, 'proximity_km': prox}
         for col in spatial_cols: base[col] = 1 if f"barangay_{brgy}" == col else 0
         df_in = pd.DataFrame([base])[features]
         
-        p_aqi = max(0.0, float(model_aqi.predict(df_in)[0]) + dynamic_offsets["air_quality"].get(brgy, 0)) + (f_years * 0.5)
-        p_flood = max(0.0, float(model_flood.predict(df_in)[0]) + dynamic_offsets["flood_risk"].get(brgy, 0)) + (f_years * 0.02)
-        p_price = max(100000.0, float(model_price.predict(df_in)[0]) + dynamic_offsets["house_price"].get(brgy, 0)) * ((1.06) ** f_years)
+        # PURE AI: No dynamic offsets, no fake math multipliers. Just model.predict()
+        p_aqi = max(0.0, float(model_aqi.predict(df_in)[0]))
+        p_flood = max(0.0, float(model_flood.predict(df_in)[0]))
+        p_price = max(100000.0, float(model_price.predict(df_in)[0]))
         
         preds.append({"barangay": brgy, "raw_aqi": p_aqi, "raw_flood": p_flood, "raw_price": p_price, "raw_prox": prox})
         
+    # The normalization and matching logic remains the same (this is valid business logic)
     results = []
-    # Normalization code remains the same...
     min_price, max_price = min(p['raw_price'] for p in preds), max(p['raw_price'] for p in preds)
     min_flood, max_flood = min(p['raw_flood'] for p in preds), max(p['raw_flood'] for p in preds)
     min_aqi, max_aqi = min(p['raw_aqi'] for p in preds), max(p['raw_aqi'] for p in preds)
@@ -312,6 +309,39 @@ def get_recommendations(req: RecommendRequest):
         })
     results.sort(key=lambda x: x['exact_match'], reverse=True)
     return results
+
+@app.post("/analyze")
+def analyze_barangay(req: AnalyzeRequest):
+    brgy = req.barangay
+    if brgy not in proximity_map: raise HTTPException(status_code=404)
+
+    prox = proximity_map.get(brgy, 5.0)
+    preds = []
+    
+    for offset in [0, 5, 10, 15, 20]:
+        target_year = 2025 + offset
+        
+        base = {'year': target_year, 'proximity_km': prox}
+        for col in spatial_cols: base[col] = 1 if f"barangay_{brgy}" == col else 0
+        df_in = pd.DataFrame([base])[features]
+        
+        # PURE AI: Let XGBoost predict the future directly.
+        aqi = max(0.0, float(model_aqi.predict(df_in)[0]))
+        flood = max(0.0, float(model_flood.predict(df_in)[0]))
+        price = max(100000.0, float(model_price.predict(df_in)[0]))
+        
+        fs = max(0, 100 - (flood/5)*100)
+        as_ = max(0, 100 - (aqi/150)*100)
+        ps = max(0, 100 - ((price-GLOBAL_MIN_PRICE)/(GLOBAL_MAX_PRICE-GLOBAL_MIN_PRICE))*100)
+        
+        preds.append({
+            "year": "Current" if offset==0 else f"+{offset} Years", 
+            "model_value": round(ps*0.4 + fs*0.25 + max(0, 100-(prox*10))*0.2 + as_*0.15),
+            "flood_score": round(fs), "aqi_score": round(as_), "price_score": round(ps),
+            "raw_price": price, "raw_aqi": aqi, "raw_flood": flood, "raw_prox": prox
+        })
+
+    return {"barangay": brgy, "future_projections": preds}
 
 @app.post("/analyze")
 def analyze_barangay(req: AnalyzeRequest):
