@@ -117,56 +117,59 @@ def admin_review(upload_id: str, action: str = Form(...), is_admin: bool = Depen
         
     entry = pending_queue[upload_id]
     
-    if action == "approve":
-        df = pd.DataFrame(entry["data"])
-        t_factor = entry["factor"]
-        t_barangay = entry["barangay"]
-        
-        # 1. Get the AI's current baseline prediction FIRST
-        prox = proximity_map.get(t_barangay, 5.0)
-        input_base = {'year': 2025, 'proximity_km': prox}
-        for col in spatial_cols:
-            input_base[col] = 1 if f"barangay_{t_barangay}" == col else 0
-        df_input = pd.DataFrame([input_base])[features]
-        
-        if t_factor == "house_price":
-            base_pred = float(model_price.predict(df_input)[0])
-        elif t_factor == "flood_risk":
-            base_pred = float(model_flood.predict(df_input)[0])
-        else:
-            base_pred = float(model_aqi.predict(df_input)[0])
-            
-        # 2. MATHEMATICAL FIX: Calculate the Weighted Shift using Historical Data
-        master_filename = f"master_{t_factor}.csv"
-        try:
-            historical_data = pd.read_csv(master_filename)
-            # Find all past records for this specific barangay
-            hist_brgy = historical_data[historical_data['barangay'] == t_barangay]
-            
-            # Combine the old history with the newly approved data
-            combined_values = pd.concat([hist_brgy['value'], df['value']])
-            
-            # Calculate the true, weighted average
-            true_new_average = combined_values.mean()
-        except FileNotFoundError:
-            # Fallback if the master file doesn't exist yet
-            true_new_average = df['value'].mean()
-            
-        # 3. Calculate and store the fractional offset
-        offset = true_new_average - base_pred
-        dynamic_offsets[t_factor][t_barangay] = offset
-        
-        # --- SECURE DATABASE STORAGE (For retrain_pipeline.py) ---
-        timestamp = datetime.datetime.now().strftime("%Y%m%d_%H%M%S")
-        filename = f"approved_datasets/{timestamp}_{t_factor}_{t_barangay.replace(' ', '')}.csv"
-        df.to_csv(filename, index=False)
-        
+    # NEW REJECT LOGIC
+    if action == "reject":
         del pending_queue[upload_id]
-        return {"message": f"Approved! System baseline instantly adjusted. Data saved for batch retraining."}
+        return {"message": "Rejected! File has been purged from the queue."}
+
+    # SAFETY NET FOR APPROVE LOGIC
+    elif action == "approve":
+        try:
+            df = pd.DataFrame(entry["data"])
+            t_factor = entry["factor"]
+            t_barangay = entry["barangay"]
+            
+            prox = proximity_map.get(t_barangay, 5.0)
+            input_base = {'year': 2025, 'proximity_km': prox}
+            for col in spatial_cols:
+                input_base[col] = 1 if f"barangay_{t_barangay}" == col else 0
+            df_input = pd.DataFrame([input_base])[features]
+            
+            if t_factor == "house_price":
+                base_pred = float(model_price.predict(df_input)[0])
+            elif t_factor == "flood_risk":
+                base_pred = float(model_flood.predict(df_input)[0])
+            else:
+                base_pred = float(model_aqi.predict(df_input)[0])
+                
+            master_filename = f"master_{t_factor}.csv"
+            try:
+                historical_data = pd.read_csv(master_filename)
+                hist_brgy = historical_data[historical_data['barangay'] == t_barangay]
+                combined_values = pd.concat([hist_brgy['value'], df['value']])
+                true_new_average = combined_values.mean()
+            except FileNotFoundError:
+                true_new_average = df['value'].mean()
+                
+            offset = true_new_average - base_pred
+            dynamic_offsets[t_factor][t_barangay] = offset
+            
+            timestamp = datetime.datetime.now().strftime("%Y%m%d_%H%M%S")
+            filename = f"approved_datasets/{timestamp}_{t_factor}_{t_barangay.replace(' ', '')}.csv"
+            df.to_csv(filename, index=False)
+            
+            del pending_queue[upload_id]
+            return {"message": f"Approved! System baseline instantly adjusted. Data saved for batch retraining."}
+            
+        except Exception as e:
+            # THIS catches the crash and sends the exact error back to React instead of a "Network Error"
+            raise HTTPException(status_code=500, detail=f"Backend Math Error: {str(e)}")
+            
+    else:
+        raise HTTPException(status_code=400, detail="Invalid action parameter.")
 
 @app.get("/admin/approved-files")
 def get_approved_files(is_admin: bool = Depends(verify_admin)):
-    """Fetches a list of all currently approved files sitting on the server."""
     approved_dir = "approved_datasets"
     if not os.path.exists(approved_dir):
         return []
@@ -188,7 +191,6 @@ def get_approved_files(is_admin: bool = Depends(verify_admin)):
 
 @app.delete("/admin/approved-files/{filename}")
 def delete_approved_file(filename: str, is_admin: bool = Depends(verify_admin)):
-    """Deletes the physical file and resets the live math offset."""
     file_path = os.path.join("approved_datasets", filename)
     
     if not os.path.exists(file_path):
@@ -213,17 +215,14 @@ def delete_approved_file(filename: str, is_admin: bool = Depends(verify_admin)):
     
 @app.get("/admin/queue/{upload_id}/data")
 def get_pending_data(upload_id: str, is_admin: bool = Depends(verify_admin)):
-    """Allows the Admin to peek inside a pending file before approving it."""
     if upload_id not in pending_queue:
         raise HTTPException(status_code=404, detail="Upload not found.")
     
-    # Extract the data from the live RAM queue and send it as a list of rows
     df = pd.DataFrame(pending_queue[upload_id]["data"])
     return df.to_dict(orient="records")
 
 @app.get("/admin/approved-files/{filename}/data")
 def get_approved_data(filename: str, is_admin: bool = Depends(verify_admin)):
-    """Allows the Admin to look inside a file that is already saved."""
     file_path = os.path.join("approved_datasets", filename)
     if not os.path.exists(file_path):
         raise HTTPException(status_code=404, detail="File not found.")
@@ -264,7 +263,6 @@ def get_recommendations(request: RecommendRequest):
         base_flood = float(model_flood.predict(df_input)[0])
         base_price = float(model_price.predict(df_input)[0])
         
-        # Apply Dynamic Baseline Offsets
         base_aqi += dynamic_offsets["air_quality"].get(brgy, 0)
         base_flood += dynamic_offsets["flood_risk"].get(brgy, 0)
         base_price += dynamic_offsets["house_price"].get(brgy, 0)
@@ -273,7 +271,6 @@ def get_recommendations(request: RecommendRequest):
         base_flood = max(0.0, base_flood)
         base_price = max(100000.0, base_price)
         
-        # Apply Future Creep
         p_aqi = base_aqi + (years_into_future * 0.5)
         p_flood = base_flood + (years_into_future * 0.02)
         p_price = base_price * ((1 + 0.06) ** years_into_future)
@@ -363,7 +360,6 @@ def analyze_barangay(request: AnalyzeRequest):
         base_flood = float(model_flood.predict(df_input)[0])
         base_price = float(model_price.predict(df_input)[0])
         
-        # Apply Dynamic Baseline Offsets
         base_aqi += dynamic_offsets["air_quality"].get(target_barangay, 0)
         base_flood += dynamic_offsets["flood_risk"].get(target_barangay, 0)
         base_price += dynamic_offsets["house_price"].get(target_barangay, 0)
