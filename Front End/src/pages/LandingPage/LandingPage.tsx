@@ -118,7 +118,7 @@ const LandingPage: React.FC = () => {
         </div>
         
         <h1 className="text-6xl md:text-8xl lg:text-[7rem] font-black text-[#2d3436] mb-8 tracking-tight drop-shadow-[0_2px_0_#ffffff]">
-          Predictive Matrix
+          House Sight Tanza
         </h1>
         
         {/* Changed border-l to border-t since it is now centered */}
