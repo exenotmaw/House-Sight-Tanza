@@ -265,7 +265,26 @@ def get_approved_files(is_admin: bool = Depends(verify_admin)):
 
 @app.delete("/admin/approved-files/{filename}")
 def delete_approved_file(filename: str, is_admin: bool = Depends(verify_admin)):
-    return {"message": "Legacy endpoint. Files are now automatically archived upon background merge."}
+    # 1. Point the scanner to the Archive where the merged files now live
+    file_path = os.path.join("archived_datasets", filename)
+    
+    # 2. Fallback: Check if it's currently in the middle of background training
+    if not os.path.exists(file_path):
+        file_path = os.path.join("approved_datasets", filename)
+        
+    # 3. If it doesn't exist in either place, throw a 404
+    if not os.path.exists(file_path):
+        raise HTTPException(status_code=404, detail="File not found in Matrix Memory.")
+        
+    try:
+        # 4. Physically delete the file from the hard drive
+        os.remove(file_path)
+        
+        # 5. Tell React it worked so the UI removes it from the screen
+        return {"message": "Purge Protocol Engaged. File permanently deleted from Matrix Memory logs."}
+        
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=str(e))
     
 @app.get("/admin/queue/{upload_id}/data")
 def get_pending_data(upload_id: str, is_admin: bool = Depends(verify_admin)):
