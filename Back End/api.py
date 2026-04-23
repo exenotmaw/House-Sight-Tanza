@@ -1,13 +1,17 @@
-from fastapi import FastAPI, HTTPException, UploadFile, File, Form, Depends
+from fastapi import FastAPI, HTTPException, UploadFile, File, Form, Depends, BackgroundTasks
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.security import OAuth2PasswordBearer, OAuth2PasswordRequestForm
 from pydantic import BaseModel, Field
+from sklearn.model_selection import train_test_split
+from sklearn.metrics import mean_squared_error, r2_score
 import pandas as pd
 import xgboost as xgb
 import io
 import os
 import uuid
 import datetime
+import glob
+import shutil
 
 # =====================================================================
 # 1. SERVER SETUP & MIDDLEWARE
@@ -44,21 +48,30 @@ model_aqi = xgb.XGBRegressor()
 model_flood = xgb.XGBRegressor()
 model_price = xgb.XGBRegressor()
 
-try:
-    model_aqi.load_model("models/model_aqi.json")
-    model_flood.load_model("models/model_flood.json")
-    model_price.load_model("models/model_price.json")
-    print("✅ All Independent AI Models loaded successfully!")
-except Exception as e:
-    print(f"⚠️ WARNING: Could not load models: {e}")
+def load_all_models():
+    """Loads or reloads the AI models into live RAM."""
+    global model_aqi, model_flood, model_price
+    try:
+        model_aqi.load_model("models/model_aqi.json")
+        model_flood.load_model("models/model_flood.json")
+        model_price.load_model("models/model_price.json")
+        print("✅ Models loaded into live RAM successfully!")
+    except Exception as e:
+        print(f"⚠️ WARNING: Could not load models: {e}")
+
+load_all_models()
 
 # MLOps State
 pending_queue = {}
 dynamic_offsets = {"house_price": {}, "flood_risk": {}, "air_quality": {}}
+
+# Ensure directories exist
 os.makedirs("approved_datasets", exist_ok=True)
+os.makedirs("archived_datasets", exist_ok=True)
+os.makedirs("models", exist_ok=True)
 
 # =====================================================================
-# 3. AUTHENTICATION LAYER (RBAC)
+# 3. AUTHENTICATION LAYER
 # =====================================================================
 oauth2_scheme = OAuth2PasswordBearer(tokenUrl="/admin/login")
 
@@ -77,7 +90,74 @@ def verify_admin(token: str = Depends(oauth2_scheme)):
     return True
 
 # =====================================================================
-# 4. DATA INGESTION & ADMIN ENDPOINTS
+# 4. ASYNCHRONOUS RETRAINING ENGINE (Runs in Background)
+# =====================================================================
+def background_retrain_task(factor_name: str, target_barangay: str):
+    """Quietly retrains the AI in the background without freezing the website."""
+    print(f"\n⚙️ [ASYNC TASK] Retraining {factor_name.upper()} model in background...")
+    master_csv = f"master_{factor_name}.csv"
+    
+    try:
+        # 1. Load Data
+        if not os.path.exists(master_csv):
+            print(f"❌ [ASYNC TASK] Master file {master_csv} missing. Aborting.")
+            return
+            
+        master_df = pd.read_csv(master_csv)
+        new_files = glob.glob(f"approved_datasets/*_{factor_name}_*.csv")
+        
+        if not new_files:
+            return
+            
+        new_dfs = [pd.read_csv(f) for f in new_files]
+        combined_df = pd.concat([master_df] + new_dfs, ignore_index=True)
+        
+        # 2. One-Hot Encode
+        for brgy in all_barangays:
+            if brgy == 'Amaya': continue
+            col_name = f"barangay_{brgy}"
+            if 'barangay' in combined_df.columns:
+                combined_df[col_name] = (combined_df['barangay'] == brgy).astype(int)
+            elif col_name not in combined_df.columns:
+                combined_df[col_name] = 0
+                
+        # 3. Train Model
+        feature_cols = ['year', 'proximity_km'] + spatial_cols
+        X = combined_df[feature_cols]
+        y = combined_df['value']
+        
+        X_train, X_test, y_train, y_test = train_test_split(X, y, test_size=0.2, random_state=42)
+        
+        model = xgb.XGBRegressor(objective='reg:squarederror', n_estimators=100, learning_rate=0.1, max_depth=5)
+        model.fit(X_train, y_train)
+        
+        # 4. Save New Model
+        model_name = factor_name.split('_')[0] if "price" not in factor_name else "price" # Handles "air", "flood", "house_price" mapping
+        if factor_name == "house_price": model_name = "price"
+        elif factor_name == "flood_risk": model_name = "flood"
+        else: model_name = "aqi"
+        
+        model_path = os.path.join("models", f"model_{model_name}.json")
+        model.save_model(model_path)
+        
+        # 5. Archive files & Update Master
+        combined_df.to_csv(master_csv, index=False)
+        for f in new_files:
+            shutil.move(f, os.path.join("archived_datasets", os.path.basename(f)))
+            
+        # 6. LIVE RELOAD: Reload RAM and wipe the temporary offset!
+        global dynamic_offsets
+        load_all_models()
+        dynamic_offsets[factor_name][target_barangay] = 0
+        
+        print(f"✅ [ASYNC TASK] Retraining Complete! AI Brain Updated.")
+        
+    except Exception as e:
+        print(f"❌ [ASYNC TASK FAILED]: {str(e)}")
+
+
+# =====================================================================
+# 5. DATA INGESTION & ADMIN ENDPOINTS
 # =====================================================================
 
 @app.post("/public/submit-csv")
@@ -92,7 +172,6 @@ async def public_submit_csv(
             raise HTTPException(status_code=400, detail="CSV must contain a 'value' column.")
             
         upload_id = str(uuid.uuid4())
-        
         pending_queue[upload_id] = {
             "id": upload_id, "barangay": barangay, "factor": factor,
             "contributor": contributor_name, "filename": file.filename,
@@ -111,18 +190,16 @@ def get_pending_queue(is_admin: bool = Depends(verify_admin)):
     ]
 
 @app.post("/admin/review/{upload_id}")
-def admin_review(upload_id: str, action: str = Form(...), is_admin: bool = Depends(verify_admin)):
+def admin_review(upload_id: str, background_tasks: BackgroundTasks, action: str = Form(...), is_admin: bool = Depends(verify_admin)):
     if upload_id not in pending_queue:
         raise HTTPException(status_code=404, detail="Upload not found.")
         
     entry = pending_queue[upload_id]
     
-    # REJECT LOGIC
     if action == "reject":
         del pending_queue[upload_id]
         return {"message": "Rejected! File has been purged from the queue."}
 
-    # APPROVE LOGIC
     elif action == "approve":
         try:
             df = pd.DataFrame(entry["data"])
@@ -135,99 +212,59 @@ def admin_review(upload_id: str, action: str = Form(...), is_admin: bool = Depen
                 input_base[col] = 1 if f"barangay_{t_barangay}" == col else 0
             df_input = pd.DataFrame([input_base])[features]
             
-            if t_factor == "house_price":
-                base_pred = float(model_price.predict(df_input)[0])
-            elif t_factor == "flood_risk":
-                base_pred = float(model_flood.predict(df_input)[0])
-            else:
-                base_pred = float(model_aqi.predict(df_input)[0])
+            if t_factor == "house_price": base_pred = float(model_price.predict(df_input)[0])
+            elif t_factor == "flood_risk": base_pred = float(model_flood.predict(df_input)[0])
+            else: base_pred = float(model_aqi.predict(df_input)[0])
                 
-            # THE FIX: We calculate the new reality strictly from the uploaded file.
-            # This bypasses the KeyError caused by one-hot encoded historical CSVs,
-            # and makes your live demo updates instant and highly visible!
-            true_new_average = float(df['value'].mean())
+            uploaded_avg = float(df['value'].mean())
+            LEARNING_RATE = 0.5 
+            merged_value = (base_pred * (1.0 - LEARNING_RATE)) + (uploaded_avg * LEARNING_RATE)
                 
-            offset = true_new_average - base_pred
-            dynamic_offsets[t_factor][t_barangay] = offset
+            offset = merged_value - base_pred
+            current_offset = dynamic_offsets[t_factor].get(t_barangay, 0)
+            dynamic_offsets[t_factor][t_barangay] = current_offset + offset
             
             timestamp = datetime.datetime.now().strftime("%Y%m%d_%H%M%S")
             filename = f"approved_datasets/{timestamp}_{t_factor}_{t_barangay.replace(' ', '')}.csv"
             df.to_csv(filename, index=False)
-            
             del pending_queue[upload_id]
-            return {"message": f"Approved! System baseline instantly adjusted. Data saved for batch retraining."}
+
+            # 🔥 THE MAGIC: We tell FastAPI to start retraining the model in the background
+            # while instantly sending the success message back to the user's browser!
+            background_tasks.add_task(background_retrain_task, t_factor, t_barangay)
+            
+            return {"message": f"Approved! UI updated instantly. AI is retraining in the background."}
             
         except Exception as e:
-            # THIS catches the crash and sends the exact error back to React
             raise HTTPException(status_code=500, detail=f"Backend Math Error: {str(e)}")
-            
     else:
         raise HTTPException(status_code=400, detail="Invalid action parameter.")
 
 @app.get("/admin/approved-files")
 def get_approved_files(is_admin: bool = Depends(verify_admin)):
-    approved_dir = "approved_datasets"
-    if not os.path.exists(approved_dir):
-        return []
-    
-    files = []
-    for filename in os.listdir(approved_dir):
-        if filename.endswith(".csv"):
-            parts = filename.replace('.csv', '').split('_')
-            if len(parts) >= 3:
-                files.append({
-                    "filename": filename,
-                    "timestamp": parts[0] + "_" + parts[1],
-                    "factor": parts[2] if len(parts) == 4 else parts[2] + "_" + parts[3], 
-                    "barangay": parts[-1]
-                })
-    
-    files.sort(key=lambda x: x["timestamp"], reverse=True)
-    return files
+    return [] # We can return an empty list or read from archived_datasets now, as approved files are instantly merged.
 
 @app.delete("/admin/approved-files/{filename}")
 def delete_approved_file(filename: str, is_admin: bool = Depends(verify_admin)):
-    file_path = os.path.join("approved_datasets", filename)
-    
-    if not os.path.exists(file_path):
-        raise HTTPException(status_code=404, detail="File not found.")
-        
-    try:
-        parts = filename.replace('.csv', '').split('_')
-        barangay = parts[-1]
-        
-        if "house_price" in filename: factor = "house_price"
-        elif "flood_risk" in filename: factor = "flood_risk"
-        else: factor = "air_quality"
-        
-        os.remove(file_path)
-        
-        if factor in dynamic_offsets and barangay in dynamic_offsets[factor]:
-            dynamic_offsets[factor][barangay] = 0
-            
-        return {"message": "File permanently deleted. Math baseline restored."}
-    except Exception as e:
-        raise HTTPException(status_code=500, detail=str(e))
+    return {"message": "Legacy endpoint. Files are now automatically archived upon background merge."}
     
 @app.get("/admin/queue/{upload_id}/data")
 def get_pending_data(upload_id: str, is_admin: bool = Depends(verify_admin)):
     if upload_id not in pending_queue:
         raise HTTPException(status_code=404, detail="Upload not found.")
-    
     df = pd.DataFrame(pending_queue[upload_id]["data"])
     return df.to_dict(orient="records")
 
 @app.get("/admin/approved-files/{filename}/data")
 def get_approved_data(filename: str, is_admin: bool = Depends(verify_admin)):
-    file_path = os.path.join("approved_datasets", filename)
+    file_path = os.path.join("archived_datasets", filename) # Redirected to archive
     if not os.path.exists(file_path):
         raise HTTPException(status_code=404, detail="File not found.")
-        
     df = pd.read_csv(file_path)
     return df.to_dict(orient="records")
 
 # =====================================================================
-# 5. PREDICTION ENDPOINTS (STUDIO & ANALYSIS)
+# 6. PREDICTION ENDPOINTS (STUDIO & ANALYSIS)
 # =====================================================================
 
 class RecommendRequest(BaseModel):
